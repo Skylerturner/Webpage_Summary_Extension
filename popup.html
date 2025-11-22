@@ -4,48 +4,69 @@
   <meta charset="UTF-8">
   <title>Smart Article Summarizer</title>
   <link rel="stylesheet" href="popup.css">
-
 </head>
 <body>
-  <div class="section">
-    <label>
-      <input type="checkbox" id="enableExtraction">
-      Enable Article Detection
-    </label>
-  </div>
 
+  <!-- NLP Analysis Section -->
   <div class="section">
     <h2>Basic NLP Insights</h2>
+    <button id="analyzeBtn">Analyze</button>
+
     <p>Word count: <span id="wordCount">-</span></p>
-    <p>Sentence count: <span id="sentenceCount">-</span></p>
     <p>Reading time: <span id="readingTime">-</span></p>
-    <p>Token estimate: <span id="tokenEstimate">-</span></p>
-    <p>Most used word: <span id="mostUsedWord">-</span></p>
+    <p>Top keywords: <span id="topKeywords">-</span></p>
+    <p>Sentiment score: <span id="sentimentScore">-</span></p>
+    <p>Subjectivity score: <span id="subjectivityScore">-</span></p>
   </div>
 
+  <!-- LLM Settings -->
   <div class="section">
-    <h2>LLM Settings</h2>
-    <label for="providerSelect">Provider:</label>
-    <select id="providerSelect">
-      <option value="huggingface">Hugging Face</option>
-      <option value="openai">OpenAI</option>
-      <option value="claude">Claude</option>
-      <option value="local">Local / Ollama</option>
+    <h2>Model Source</h2>
+    <label for="sourceSelect">Select source:</label>
+    <select id="sourceSelect">
+      <option value="Default">Default (transformers.js)</option>
+      <option value="Local">Local (Ollama)</option>
+      <option value="Online">Online (Personal API Key)</option>
     </select>
+  </div>
 
-    <label for="apiKey">API Key (if required):</label>
-    <input type="text" id="apiKey" placeholder="Enter API key">
+  <div class="section" id="providerSection">
+    <label for="providerSelect">Select provider:</label>
+    <select id="providerSelect">
+      <!-- Populated dynamically -->
+    </select>
+  </div>
+
+  <div class="section" id="localSection" style="display:none">
+    <label for="localBackendSelect">Select local backend:</label>
+    <select id="localBackendSelect">
+      <!-- Populated dynamically -->
+    </select>
+  </div>
+
+  <div class="section" id="apiKeySection">
+    <label for="apiKey">API Key:</label>
+    <input type="text" id="apiKey" placeholder="Enter your API key">
   </div>
 
   <div class="section">
-    <button id="generateSummary">Generate Summary</button>
+    <label for="modelSelect">Select model:</label>
+    <select id="modelSelect">
+      <!-- Populated dynamically -->
+    </select>
+  </div>
+
+  <!-- Summarization Section -->
+  <div class="section">
+    <button id="generateSummary">Summarize</button>
   </div>
 
   <div class="section">
     <h2>Summary</h2>
-    <div id="summary">Press "Generate Summary" to see output.</div>
+    <div id="summary">Press "Summarize" to see output.</div>
   </div>
 
   <script src="popup.js"></script>
 </body>
 </html>
+

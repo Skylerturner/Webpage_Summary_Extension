@@ -11,7 +11,9 @@
 
   "host_permissions": [
     "http://localhost:11434/*",
-    "https://api-inference.huggingface.co/*"
+    "https://api-inference.huggingface.co/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*"
   ],
 
   "action": {
