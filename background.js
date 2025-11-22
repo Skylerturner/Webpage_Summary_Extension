@@ -1,9 +1,97 @@
 // background.js
-// Handles LLM API calls and messages from popup.js
+// Handles LLM API calls and messages from popup.js with smart chunking
 
-// --------------------
-// Helper: fetch summary from OpenAI
-async function summarizeOpenAI(text, apiKey, model="gpt-4o-mini") {
+// ========================================
+// Offscreen Document Management
+// ========================================
+
+let offscreenCreating; // Promise to track offscreen document creation
+
+async function ensureOffscreenDocument() {
+  // Check if offscreen document already exists
+  const existingContexts = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT']
+  });
+
+  if (existingContexts.length > 0) {
+    return;
+  }
+
+  // If already creating, wait for that to finish
+  if (offscreenCreating) {
+    await offscreenCreating;
+  } else {
+    // Create offscreen document
+    offscreenCreating = chrome.offscreen.createDocument({
+      url: 'offscreen.html',
+      reasons: ['WORKERS'],
+      justification: 'Run transformers.js for local AI summarization'
+    });
+
+    await offscreenCreating;
+    offscreenCreating = null;
+  }
+}
+
+// ========================================
+// Token & Chunking Helpers
+// ========================================
+
+function estimateTokens(text) {
+  // More accurate estimation accounting for word density
+  const words = text.match(/\w+/g) || [];
+  // Average: 1 token per word, plus punctuation/spaces
+  return Math.ceil(words.length * 1.3);
+}
+
+function chunkText(text, maxTokensPerChunk = 2000) {
+  const maxChars = maxTokensPerChunk * 4;
+  
+  if (text.length <= maxChars) {
+    return [text];
+  }
+
+  const paragraphs = text.split(/\n\n+/);
+  const chunks = [];
+  let currentChunk = "";
+
+  for (const para of paragraphs) {
+    if ((currentChunk + para).length <= maxChars) {
+      currentChunk += (currentChunk ? "\n\n" : "") + para;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      
+      // If single paragraph is too long, split by sentences
+      if (para.length > maxChars) {
+        const sentences = para.match(/[^.!?]+[.!?]+/g) || [para];
+        let sentenceChunk = "";
+        
+        for (const sentence of sentences) {
+          if ((sentenceChunk + sentence).length <= maxChars) {
+            sentenceChunk += sentence;
+          } else {
+            if (sentenceChunk) chunks.push(sentenceChunk);
+            sentenceChunk = sentence;
+          }
+        }
+        
+        if (sentenceChunk) currentChunk = sentenceChunk;
+      } else {
+        currentChunk = para;
+      }
+    }
+  }
+
+  if (currentChunk) chunks.push(currentChunk);
+  
+  return chunks;
+}
+
+// ========================================
+// API Summarization Functions
+// ========================================
+
+async function summarizeOpenAI(text, apiKey, model = "gpt-4o-mini") {
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -14,85 +102,224 @@ async function summarizeOpenAI(text, apiKey, model="gpt-4o-mini") {
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: "You are a helpful summarizer." },
-          { role: "user", content: text }
-        ]
+          { 
+            role: "system", 
+            content: "You are a helpful assistant that creates concise, accurate summaries of articles. Focus on the main points and key information."
+          },
+          { 
+            role: "user", 
+            content: `Please provide a concise summary of the following article:\n\n${text}`
+          }
+        ],
+        max_tokens: 500,
+        temperature: 0.3
       })
     });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || `HTTP ${response.status}`);
+    }
+
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || "";
+    return data.choices?.[0]?.message?.content || "No summary generated.";
   } catch (err) {
     console.error("OpenAI summarization error:", err);
     throw err;
   }
 }
 
-// --------------------
-// Helper: fetch summary from Claude
-async function summarizeClaude(text, apiKey, model="claude-v1") {
+async function summarizeClaude(text, apiKey, model = "claude-3-haiku-20240307") {
   try {
-    const response = await fetch("https://api.anthropic.com/v1/complete", {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model,
-        prompt: `Please summarize the following article:\n\n${text}`,
-        max_tokens_to_sample: 500
+        max_tokens: 1024,
+        temperature: 0.3,
+        messages: [
+          {
+            role: "user",
+            content: `Please provide a concise, well-structured summary of the following article. Focus on the main points and key takeaways:\n\n${text}`
+          }
+        ]
       })
     });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || `HTTP ${response.status}`);
+    }
+
     const data = await response.json();
-    return data.completion || "";
+    return data.content?.[0]?.text || "No summary generated.";
   } catch (err) {
     console.error("Claude summarization error:", err);
     throw err;
   }
 }
 
-// --------------------
-// Local summarization: transformers.js or Ollama
-async function summarizeLocal(text, backend="transformers.js") {
-  if (backend === "transformers.js") {
-    if (!window.transformers) return text;
-    try {
-      const summarizer = await window.transformers.pipeline("summarization", "distilbart-cnn-12-6");
-      const summaryArr = await summarizer(text, { max_length: 150, min_length: 40, do_sample: false });
-      return summaryArr[0].summary_text || text;
-    } catch (err) {
-      console.error("Transformers.js summarization failed:", err);
-      return text;
+async function summarizeOllama(text, model = "llama-2-7b") {
+  try {
+    const response = await fetch("http://localhost:11434/api/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        prompt: `Please provide a concise summary of the following article. Focus on the main points:\n\n${text}\n\nSummary:`,
+        stream: false,
+        options: {
+          temperature: 0.3,
+          num_predict: 500
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama error: HTTP ${response.status}`);
     }
-  } else if (backend === "Ollama") {
-    // placeholder for Ollama local API integration
-    return text;
+
+    const data = await response.json();
+    return data.response || "No summary generated.";
+  } catch (err) {
+    console.error("Ollama summarization error:", err);
+    throw new Error("Ollama error: " + err.message + ". Make sure Ollama is running on localhost:11434");
   }
-  return text;
 }
 
-// --------------------
-// Compute basic NLP metrics
+async function summarizeWithTransformers(text, model = "distilbart-cnn-12-6") {
+  try {
+    // Ensure offscreen document is ready
+    await ensureOffscreenDocument();
+
+    // Send message to offscreen document (it handles chunking internally)
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { action: "summarizeWithTransformers", text, model },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else if (response?.success) {
+            resolve(response.summary);
+          } else {
+            reject(new Error(response?.error || "Summarization failed"));
+          }
+        }
+      );
+    });
+  } catch (err) {
+    console.error("Transformers.js summarization failed:", err);
+    throw err;
+  }
+}
+
+// ========================================
+// Smart Long-Text Summarization
+// ========================================
+
+async function summarizeLongText(text, provider, apiKey, model) {
+  const tokens = estimateTokens(text);
+  console.log(`Article length: ${tokens} tokens`);
+
+  // Token limits by provider (conservative estimates)
+  const providerLimits = {
+    "transformers.js": 512, // Handled by offscreen.js
+    "Ollama": 2500,
+    "openai": 8000,  // Most OpenAI models can handle more, but we chunk for cost efficiency
+    "claude": 8000   // Claude can handle much more, but chunking saves tokens
+  };
+
+  const limit = providerLimits[provider] || 2500;
+
+  // For transformers.js, let offscreen.js handle chunking
+  if (provider === "transformers.js") {
+    return await summarizeWithTransformers(text, model);
+  }
+
+  // If text is short enough, summarize directly
+  if (tokens < limit * 0.8) {
+    return await summarizeDirect(text, provider, apiKey, model);
+  }
+
+  // For long text, use chunking strategy
+  console.log(`Long article detected (${tokens} tokens). Chunking for ${provider}...`);
+  const chunks = chunkText(text, Math.floor(limit * 0.7));
+  console.log(`Split into ${chunks.length} chunks`);
+
+  // Summarize each chunk
+  const chunkSummaries = [];
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`Summarizing chunk ${i + 1}/${chunks.length}`);
+    const summary = await summarizeDirect(chunks[i], provider, apiKey, model);
+    chunkSummaries.push(summary);
+  }
+
+  // If we got multiple summaries, combine and summarize again
+  if (chunkSummaries.length > 1) {
+    const combined = chunkSummaries.join("\n\n");
+    
+    // If combined summaries are still too long, return them formatted
+    if (estimateTokens(combined) > limit * 0.8) {
+      return "SUMMARY OF LONG ARTICLE (in parts):\n\n" + 
+             chunkSummaries.map((s, i) => `Part ${i + 1}:\n${s}`).join("\n\n---\n\n");
+    }
+    
+    // Otherwise, create a final summary of summaries
+    console.log("Creating final summary from chunk summaries...");
+    const finalPrompt = `The following are summaries of different parts of an article. Please combine them into one cohesive summary:\n\n${combined}`;
+    return await summarizeDirect(finalPrompt, provider, apiKey, model);
+  }
+
+  return chunkSummaries[0];
+}
+
+async function summarizeDirect(text, provider, apiKey, model) {
+  switch (provider) {
+    case "transformers.js":
+      return await summarizeWithTransformers(text, model);
+    case "Ollama":
+      return await summarizeOllama(text, model);
+    case "openai":
+      return await summarizeOpenAI(text, apiKey, model);
+    case "claude":
+      return await summarizeClaude(text, apiKey, model);
+    default:
+      throw new Error("Unknown provider: " + provider);
+  }
+}
+
+// ========================================
+// NLP Computation
+// ========================================
+
 function computeNLP(text) {
-  const stopwords = ["the","a","an","and","or","of","in","on","for","with","to","by"];
+  const stopwords = ["the", "a", "an", "and", "or", "of", "in", "on", "for", "with", "to", "by"];
   const words = text.split(/\s+/).filter(w => w.trim().length > 0);
   const wordCount = words.length;
-  const readingTime = Math.ceil(wordCount / 200);
+  const readingTime = Math.ceil(wordCount / 200) + " min";
 
   const freq = {};
   words.forEach(w => {
     const lw = w.toLowerCase();
     if (!stopwords.includes(lw)) freq[lw] = (freq[lw] || 0) + 1;
   });
+
   const topKeywords = Object.entries(freq)
-    .sort((a,b) => b[1]-a[1])
-    .slice(0,5)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
     .map(x => x[0])
     .join(", ");
 
-  const positiveWords = ["good","great","excellent","positive","happy","success","benefit","improve"];
-  const negativeWords = ["bad","poor","negative","fail","problem","worse","decline","issue"];
-  const subjectiveWords = ["I","we","my","our","believe","think","feel","opinion"];
+  const positiveWords = ["good", "great", "excellent", "positive", "happy", "success", "benefit", "improve"];
+  const negativeWords = ["bad", "poor", "negative", "fail", "problem", "worse", "decline", "issue"];
+  const subjectiveWords = ["I", "we", "my", "our", "believe", "think", "feel", "opinion"];
 
   let sentimentScore = 0;
   let subjectivityScore = 0;
@@ -109,36 +336,19 @@ function computeNLP(text) {
   return { wordCount, readingTime, topKeywords, sentimentScore, subjectivityScore };
 }
 
-// --------------------
-// Message listener
+// ========================================
+// Message Listener
+// ========================================
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const { action, provider, model, apiKey, text } = message;
 
   if (action === "generateSummary") {
-    let summaryPromise;
-
-    switch (provider) {
-      case "transformers.js":
-        summaryPromise = summarizeLocal(text, "transformers.js");
-        break;
-      case "Ollama":
-        summaryPromise = summarizeLocal(text, "Ollama");
-        break;
-      case "openai":
-        summaryPromise = summarizeOpenAI(text, apiKey, model);
-        break;
-      case "claude":
-        summaryPromise = summarizeClaude(text, apiKey, model);
-        break;
-      default:
-        summaryPromise = Promise.reject("Unknown provider: " + provider);
-    }
-
-    summaryPromise
+    summarizeLongText(text, provider, apiKey, model)
       .then(summary => sendResponse({ success: true, summary }))
-      .catch(err => sendResponse({ success: false, error: err.message || err }));
+      .catch(err => sendResponse({ success: false, error: err.message || String(err) }));
 
-    return true; // keep channel open
+    return true; // Keep channel open for async response
   }
 
   if (action === "computeNLP") {

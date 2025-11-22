@@ -30,7 +30,6 @@ function removeStopwords(text) {
         .trim();
 }
 
-
 // Normalize text spacing
 function cleanText(text) {
     return text
@@ -138,18 +137,15 @@ function extractArticle() {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === "extractText") {
         const { text, source } = extractArticle();
+        
+        // Return both original and reduced text
+        const reducedText = removeStopwords(text);
 
-        const cleanForLLM = removeStopwords(text);
-
-        chrome.storage.local.set({
-            article: {
-                originalText: text,
-                reducedText: cleanForLLM    // <—— add this
-            },
-            source
+        sendResponse({ 
+            text: text,              // Original text
+            reducedText: reducedText, // Stopwords removed
+            source: source            // Where it came from
         });
-
-        sendResponse({ text });
     }
 });
 

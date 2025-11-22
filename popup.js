@@ -21,6 +21,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const analyzeBtn = document.getElementById("analyzeBtn");
   const generateBtn = document.getElementById("generateSummary");
   const summaryEl = document.getElementById("summary");
+  const reduceStopwordsCheckbox = document.getElementById("reduceStopwords");
 
   // --------------------
   // Model Options
@@ -36,8 +37,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   const personalProviders = {
-    openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
-    claude: ["claude-3-sonnet", "claude-3-haiku"]
+    openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+    claude: ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"]
   };
 
   // --------------------
@@ -97,28 +98,33 @@ document.addEventListener("DOMContentLoaded", async () => {
     updateModelDropdown();
   }
 
-  // --------------------
-  // Reduce Stopwords Checkbox
-  // --------------------
-  const reduceStopwordsCheckbox = document.getElementById("reduceStopwords");
+  // Helper: Get text from active tab
+  async function getTextFromActiveTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tab.id, { action: "extractText" }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else if (!response?.text) {
+          reject(new Error("No text extracted"));
+        } else {
+          resolve(response);
+        }
+      });
+    });
+  }
 
-  // Load saved state
+  // --------------------
+  // Load Saved Settings
+  // --------------------
   chrome.storage.sync.get(["reduceStopwords"], (result) => {
     reduceStopwordsCheckbox.checked = result.reduceStopwords ?? false;
   });
 
-  // Save on change
-  reduceStopwordsCheckbox.addEventListener("change", () => {
-    chrome.storage.sync.set({ reduceStopwords: reduceStopwordsCheckbox.checked });
-  });
-
-  // --------------------
-  // Initial Load
-  // --------------------
   chrome.storage.sync.get(
     ["selectedProvider", "apiKey", "selectedSource", "selectedModel"],
     (result) => {
-
       if (result.selectedSource) sourceSelect.value = result.selectedSource;
       if (result.selectedProvider) providerSelect.value = result.selectedProvider;
       if (result.apiKey) apiKeyEl.value = result.apiKey;
@@ -129,7 +135,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   );
 
-  // Save settings
+  // --------------------
+  // Save Settings on Change
+  // --------------------
+  reduceStopwordsCheckbox.addEventListener("change", () => {
+    chrome.storage.sync.set({ reduceStopwords: reduceStopwordsCheckbox.checked });
+  });
+
   sourceSelect.addEventListener("change", () => {
     chrome.storage.sync.set({ selectedSource: sourceSelect.value });
     updateUI();
@@ -151,54 +163,65 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // --------------------
-  // NLP Analysis Button
+  // ANALYZE Button - Independent
   // --------------------
   analyzeBtn.addEventListener("click", async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    try {
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = "Analyzing...";
 
-    chrome.tabs.sendMessage(tab.id, { action: "extractText" }, (response) => {
-      if (!response?.text) {
-        wordCountEl.textContent = "-";
-        readingTimeEl.textContent = "-";
-        topKeywordsEl.textContent = "-";
-        sentimentScoreEl.textContent = "-";
-        subjectivityScoreEl.textContent = "-";
-        return;
-      }
+      const response = await getTextFromActiveTab();
 
+      // Send to background for NLP computation
       chrome.runtime.sendMessage(
         { action: "computeNLP", text: response.text },
         (nlp) => {
-          if (!nlp) return;
+          if (!nlp) {
+            wordCountEl.textContent = "-";
+            readingTimeEl.textContent = "-";
+            topKeywordsEl.textContent = "-";
+            sentimentScoreEl.textContent = "-";
+            subjectivityScoreEl.textContent = "-";
+            return;
+          }
 
           wordCountEl.textContent = nlp.wordCount;
           readingTimeEl.textContent = nlp.readingTime;
           topKeywordsEl.textContent = nlp.topKeywords;
           sentimentScoreEl.textContent = nlp.sentimentScore;
           subjectivityScoreEl.textContent = nlp.subjectivityScore;
-
-          chrome.storage.local.set({ nlp });
         }
       );
-    });
+    } catch (err) {
+      console.error("Analyze error:", err);
+      wordCountEl.textContent = "Error";
+      readingTimeEl.textContent = "-";
+      topKeywordsEl.textContent = err.message;
+      sentimentScoreEl.textContent = "-";
+      subjectivityScoreEl.textContent = "-";
+    } finally {
+      analyzeBtn.disabled = false;
+      analyzeBtn.textContent = "Analyze";
+    }
   });
 
   // --------------------
-  // Summary Generation
+  // SUMMARIZE Button - Independent
   // --------------------
-  generateBtn.addEventListener("click", () => {
-    chrome.storage.local.get(["article"], (data) => {
-      if (!data.article?.originalText) {
-        summaryEl.textContent = "No article text available.";
-        return;
-      }
+  generateBtn.addEventListener("click", async () => {
+    try {
+      generateBtn.disabled = true;
+      generateBtn.textContent = "Summarizing...";
+      summaryEl.textContent = "Processing...";
 
+      // Extract text from current tab
+      const response = await getTextFromActiveTab();
+      
+      // Use reduced or original text based on checkbox
       const useReduced = reduceStopwordsCheckbox.checked;
+      const text = useReduced ? response.reducedText : response.text;
 
-      const text = useReduced
-        ? data.article.reducedText || data.article.originalText
-        : data.article.originalText;
-
+      // Get model settings
       const source = sourceSelect.value;
       let provider = null;
       let apiKey = null;
@@ -213,16 +236,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         apiKey = apiKeyEl.value;
       }
 
+      // Send to background for summarization
       chrome.runtime.sendMessage(
         { action: "generateSummary", text, provider, apiKey, model },
-        (response) => {
-          if (response?.success) {
-            summaryEl.textContent = response.summary;
+        (summaryResponse) => {
+          if (summaryResponse?.success) {
+            summaryEl.textContent = summaryResponse.summary;
           } else {
-            summaryEl.textContent = "Error generating summary: " + (response?.error || "Unknown");
+            summaryEl.textContent = "Error: " + (summaryResponse?.error || "Unknown error");
           }
         }
       );
-    });
+    } catch (err) {
+      console.error("Summarize error:", err);
+      summaryEl.textContent = "Error extracting text: " + err.message;
+    } finally {
+      generateBtn.disabled = false;
+      generateBtn.textContent = "Summarize";
+    }
   });
 });

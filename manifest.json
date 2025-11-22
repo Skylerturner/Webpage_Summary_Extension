@@ -6,12 +6,12 @@
   "permissions": [
     "activeTab",
     "storage",
-    "scripting"
+    "scripting",
+    "offscreen"
   ],
 
   "host_permissions": [
     "http://localhost:11434/*",
-    "https://api-inference.huggingface.co/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*"
   ],
@@ -34,13 +34,6 @@
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_idle"
-    }
-  ],
-
-  "web_accessible_resources": [
-    {
-      "resources": ["transformers.min.js"],
-      "matches": ["<all_urls>"]
     }
   ],
 
