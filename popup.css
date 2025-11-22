@@ -1,6 +1,5 @@
 /* popup.css */
 
-/* General popup styling */
 body {
   font-family: Arial, sans-serif;
   width: 320px;
@@ -8,9 +7,10 @@ body {
   background-color: #ffffff;
   color: #222;
   box-sizing: border-box;
+  overflow-y: auto;
 }
 
-/* Section spacing */
+/* Section layout */
 .section {
   margin-bottom: 15px;
 }
@@ -27,17 +27,18 @@ h2 {
 label {
   display: block;
   margin-bottom: 5px;
-  font-weight: normal;
 }
 
-/* Inputs and select */
-select, input[type="text"] {
+/* Inputs and Selects */
+select,
+input[type="text"],
+input[type="password"] {
   width: 100%;
   margin-bottom: 5px;
   padding: 5px;
-  box-sizing: border-box;
   border: 1px solid #ccc;
   border-radius: 3px;
+  box-sizing: border-box;
 }
 
 /* Buttons */
@@ -57,6 +58,11 @@ button:hover {
   background-color: #005ea6;
 }
 
+button:disabled {
+  background-color: #999;
+  cursor: not-allowed;
+}
+
 /* Summary box */
 #summary {
   margin-top: 10px;
@@ -70,7 +76,7 @@ button:hover {
   max-height: 200px;
 }
 
-/* Top keywords box (scrollable if long) */
+/* Scrollable keyword box */
 #topKeywords {
   display: block;
   max-height: 80px;
@@ -81,17 +87,7 @@ button:hover {
   border-radius: 3px;
 }
 
-/* Consistent spacing for NLP metric paragraphs */
-.section p {
-  margin-bottom: 4px;
-}
-
-/* Checkbox adjustments */
-input[type="checkbox"] {
-  margin-right: 5px;
-}
-
-/* Hidden class for smoother show/hide in JS */
+/* Smooth hide/show */
 .hidden {
   display: none !important;
 }

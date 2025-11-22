@@ -1,5 +1,5 @@
-// popup.js
 document.addEventListener("DOMContentLoaded", async () => {
+
   // --------------------
   // UI Elements
   // --------------------
@@ -23,24 +23,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   const summaryEl = document.getElementById("summary");
 
   // --------------------
-  // Available models
+  // Model Options
   // --------------------
-  const defaultModels = ["distilbart-cnn-12-6", "t5-small", "t5-base"]; // bundled transformers.js
+  const defaultModels = ["distilbart-cnn-12-6", "t5-small", "t5-base"];
+
   const localBackends = {
-    "Ollama": [
+    Ollama: [
       "llama-2-7b", "llama-2-13b",
       "gemma3:4b", "gemma3:1b",
       "mistral-7b", "qwen3:4b", "deepseek-r1:8b"
     ]
   };
+
   const personalProviders = {
-    openai: ["gpt-4", "gpt-3.5-turbo", "gpt-4o-mini"],
-    claude: ["claude-v1", "claude-instant"],
-    gemini: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
+    claude: ["claude-3-sonnet", "claude-3-haiku"]
   };
 
   // --------------------
-  // Helper to populate select dropdown
+  // Helpers
   // --------------------
   function populateSelect(selectEl, options) {
     selectEl.innerHTML = "";
@@ -52,9 +53,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // --------------------
-  // Update model dropdown based on source
-  // --------------------
+  function show(el) { el.classList.remove("hidden"); }
+  function hide(el) { el.classList.add("hidden"); }
+
   function updateModelDropdown() {
     const source = sourceSelect.value;
     let models = [];
@@ -62,35 +63,34 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (source === "Default") {
       models = defaultModels;
     } else if (source === "Local") {
-      const backend = localBackendSelect.value;
-      models = localBackends[backend] || [];
+      models = localBackends[localBackendSelect.value] || [];
     } else if (source === "Online") {
-      const provider = providerSelect.value;
-      models = personalProviders[provider] || [];
+      models = personalProviders[providerSelect.value] || [];
     }
 
     populateSelect(modelSelect, models);
   }
 
-  // --------------------
-  // Update UI visibility based on source
-  // --------------------
   function updateUI() {
     const source = sourceSelect.value;
 
     if (source === "Default") {
-      providerSection.style.display = "none";
-      apiKeySection.style.display = "none";
-      localSection.style.display = "none";
-    } else if (source === "Local") {
-      providerSection.style.display = "none";
-      apiKeySection.style.display = "none";
-      localSection.style.display = "block";
+      hide(providerSection);
+      hide(apiKeySection);
+      hide(localSection);
+    }
+
+    if (source === "Local") {
+      hide(providerSection);
+      hide(apiKeySection);
+      show(localSection);
       populateSelect(localBackendSelect, Object.keys(localBackends));
-    } else if (source === "Online") {
-      providerSection.style.display = "block";
-      apiKeySection.style.display = "block";
-      localSection.style.display = "none";
+    }
+
+    if (source === "Online") {
+      show(providerSection);
+      show(apiKeySection);
+      hide(localSection);
       populateSelect(providerSelect, Object.keys(personalProviders));
     }
 
@@ -98,34 +98,64 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --------------------
-  // Initialize UI
+  // Reduce Stopwords Checkbox
   // --------------------
-  sourceSelect.addEventListener("change", updateUI);
-  providerSelect.addEventListener("change", updateModelDropdown);
-  localBackendSelect.addEventListener("change", updateModelDropdown);
-  updateUI();
+  const reduceStopwordsCheckbox = document.getElementById("reduceStopwords");
+
+  // Load saved state
+  chrome.storage.sync.get(["reduceStopwords"], (result) => {
+    reduceStopwordsCheckbox.checked = result.reduceStopwords ?? false;
+  });
+
+  // Save on change
+  reduceStopwordsCheckbox.addEventListener("change", () => {
+    chrome.storage.sync.set({ reduceStopwords: reduceStopwordsCheckbox.checked });
+  });
 
   // --------------------
-  // Load saved API key and provider
+  // Initial Load
   // --------------------
-  chrome.storage.sync.get(["selectedProvider", "apiKey"], (result) => {
-    providerSelect.value = result.selectedProvider || "openai";
-    apiKeyEl.value = result.apiKey || "";
+  chrome.storage.sync.get(
+    ["selectedProvider", "apiKey", "selectedSource", "selectedModel"],
+    (result) => {
+
+      if (result.selectedSource) sourceSelect.value = result.selectedSource;
+      if (result.selectedProvider) providerSelect.value = result.selectedProvider;
+      if (result.apiKey) apiKeyEl.value = result.apiKey;
+
+      updateUI();
+
+      if (result.selectedModel) modelSelect.value = result.selectedModel;
+    }
+  );
+
+  // Save settings
+  sourceSelect.addEventListener("change", () => {
+    chrome.storage.sync.set({ selectedSource: sourceSelect.value });
+    updateUI();
   });
 
   providerSelect.addEventListener("change", () => {
     chrome.storage.sync.set({ selectedProvider: providerSelect.value });
+    updateModelDropdown();
   });
 
+  localBackendSelect.addEventListener("change", updateModelDropdown);
+
   apiKeyEl.addEventListener("input", () => {
-    chrome.storage.sync.set({ apiKey: apiKeyEl.value });
+    chrome.storage.local.set({ apiKey: apiKeyEl.value });
+  });
+
+  modelSelect.addEventListener("change", () => {
+    chrome.storage.sync.set({ selectedModel: modelSelect.value });
   });
 
   // --------------------
-  // Analyze button
+  // NLP Analysis Button
   // --------------------
   analyzeBtn.addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
     chrome.tabs.sendMessage(tab.id, { action: "extractText" }, (response) => {
       if (!response?.text) {
         wordCountEl.textContent = "-";
@@ -136,22 +166,25 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      chrome.runtime.sendMessage({ action: "computeNLP", text: response.text }, (nlp) => {
-        if (!nlp) return;
+      chrome.runtime.sendMessage(
+        { action: "computeNLP", text: response.text },
+        (nlp) => {
+          if (!nlp) return;
 
-        wordCountEl.textContent = nlp.wordCount;
-        readingTimeEl.textContent = nlp.readingTime;
-        topKeywordsEl.textContent = nlp.topKeywords;
-        sentimentScoreEl.textContent = nlp.sentimentScore;
-        subjectivityScoreEl.textContent = nlp.subjectivityScore;
+          wordCountEl.textContent = nlp.wordCount;
+          readingTimeEl.textContent = nlp.readingTime;
+          topKeywordsEl.textContent = nlp.topKeywords;
+          sentimentScoreEl.textContent = nlp.sentimentScore;
+          subjectivityScoreEl.textContent = nlp.subjectivityScore;
 
-        chrome.storage.local.set({ nlp });
-      });
+          chrome.storage.local.set({ nlp });
+        }
+      );
     });
   });
 
   // --------------------
-  // Generate summary
+  // Summary Generation
   // --------------------
   generateBtn.addEventListener("click", () => {
     chrome.storage.local.get(["article"], (data) => {
@@ -160,7 +193,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      const text = data.article.originalText;
+      const useReduced = reduceStopwordsCheckbox.checked;
+
+      const text = useReduced
+        ? data.article.reducedText || data.article.originalText
+        : data.article.originalText;
+
       const source = sourceSelect.value;
       let provider = null;
       let apiKey = null;
@@ -175,13 +213,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         apiKey = apiKeyEl.value;
       }
 
-      chrome.runtime.sendMessage({ action: "generateSummary", text, provider, apiKey, model }, (response) => {
-        if (response?.success) {
-          summaryEl.textContent = response.summary;
-        } else {
-          summaryEl.textContent = "Error generating summary: " + (response?.error || "Unknown");
+      chrome.runtime.sendMessage(
+        { action: "generateSummary", text, provider, apiKey, model },
+        (response) => {
+          if (response?.success) {
+            summaryEl.textContent = response.summary;
+          } else {
+            summaryEl.textContent = "Error generating summary: " + (response?.error || "Unknown");
+          }
         }
-      });
+      );
     });
   });
 });

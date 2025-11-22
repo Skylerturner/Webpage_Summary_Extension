@@ -30,36 +30,37 @@
     </select>
   </div>
 
-  <div class="section" id="providerSection">
+  <div class="section hidden" id="providerSection">
     <label for="providerSelect">Select provider:</label>
-    <select id="providerSelect">
-      <!-- Populated dynamically -->
-    </select>
+    <select id="providerSelect"></select>
   </div>
 
-  <div class="section" id="localSection" style="display:none">
+  <div class="section hidden" id="localSection">
     <label for="localBackendSelect">Select local backend:</label>
-    <select id="localBackendSelect">
-      <!-- Populated dynamically -->
-    </select>
+    <select id="localBackendSelect"></select>
   </div>
 
-  <div class="section" id="apiKeySection">
+  <div class="section hidden" id="apiKeySection">
     <label for="apiKey">API Key:</label>
-    <input type="text" id="apiKey" placeholder="Enter your API key">
+    <input type="password" id="apiKey" placeholder="Enter your API key">
   </div>
 
   <div class="section">
     <label for="modelSelect">Select model:</label>
-    <select id="modelSelect">
-      <!-- Populated dynamically -->
-    </select>
+    <select id="modelSelect"></select>
   </div>
 
   <!-- Summarization Section -->
   <div class="section">
     <button id="generateSummary">Summarize</button>
   </div>
+  
+  <div class="section">
+  <label>
+    <input type="checkbox" id="reduceStopwords">
+    Reduce stopwords before sending text to LLM (experimental)
+  </label>
+</div>
 
   <div class="section">
     <h2>Summary</h2>
@@ -69,4 +70,5 @@
   <script src="popup.js"></script>
 </body>
 </html>
+
 
