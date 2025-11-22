@@ -1,0 +1,74 @@
+/* popup.css */
+
+/* General popup styling */
+body {
+  font-family: Arial, sans-serif;
+  width: 320px;
+  padding: 10px;
+  background-color: #ffffff;
+  color: #222;
+}
+
+/* Section spacing */
+.section {
+  margin-bottom: 15px;
+}
+
+/* Headings */
+h2 {
+  font-size: 16px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 3px;
+}
+
+/* Labels */
+label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: normal;
+}
+
+/* Inputs and select */
+select, input[type="text"] {
+  width: 100%;
+  margin-bottom: 5px;
+  padding: 5px;
+  box-sizing: border-box;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+
+/* Button styling */
+button {
+  width: 100%;
+  padding: 7px;
+  font-size: 14px;
+  background-color: #0078d4;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #005ea6;
+}
+
+/* Summary box */
+#summary {
+  margin-top: 10px;
+  padding: 6px;
+  min-height: 60px;
+  white-space: pre-wrap;
+  background: #f1f1f1;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  overflow-y: auto;
+  max-height: 200px;
+}
+
+/* Checkbox adjustments */
+input[type="checkbox"] {
+  margin-right: 5px;
+}

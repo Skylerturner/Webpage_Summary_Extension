@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Article Summarizer</title>
+  <link rel="stylesheet" href="popup.css">
+
+</head>
+<body>
+  <div class="section">
+    <label>
+      <input type="checkbox" id="enableExtraction">
+      Enable Article Detection
+    </label>
+  </div>
+
+  <div class="section">
+    <h2>Basic NLP Insights</h2>
+    <p>Word count: <span id="wordCount">-</span></p>
+    <p>Sentence count: <span id="sentenceCount">-</span></p>
+    <p>Reading time: <span id="readingTime">-</span></p>
+    <p>Token estimate: <span id="tokenEstimate">-</span></p>
+    <p>Most used word: <span id="mostUsedWord">-</span></p>
+  </div>
+
+  <div class="section">
+    <h2>LLM Settings</h2>
+    <label for="providerSelect">Provider:</label>
+    <select id="providerSelect">
+      <option value="huggingface">Hugging Face</option>
+      <option value="openai">OpenAI</option>
+      <option value="claude">Claude</option>
+      <option value="local">Local / Ollama</option>
+    </select>
+
+    <label for="apiKey">API Key (if required):</label>
+    <input type="text" id="apiKey" placeholder="Enter API key">
+  </div>
+
+  <div class="section">
+    <button id="generateSummary">Generate Summary</button>
+  </div>
+
+  <div class="section">
+    <h2>Summary</h2>
+    <div id="summary">Press "Generate Summary" to see output.</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
