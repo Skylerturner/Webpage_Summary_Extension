@@ -1,5 +1,11 @@
 document.addEventListener("DOMContentLoaded", async () => {
 
+  // DEBUG: Check if elements exist
+  console.log("Progress elements check:", {
+    progressSection: document.getElementById("progressSection"),
+    progressBar: document.getElementById("progressBar"),
+    progressText: document.getElementById("progressText")
+  });
   // --------------------
   // UI Elements
   // --------------------
@@ -8,6 +14,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const topKeywordsEl = document.getElementById("topKeywords");
   const sentimentScoreEl = document.getElementById("sentimentScore");
   const subjectivityScoreEl = document.getElementById("subjectivityScore");
+  const sentimentLabelEl = document.getElementById("sentimentLabel");
+  const subjectivityLabelEl = document.getElementById("subjectivityLabel");
 
   const sourceSelect = document.getElementById("sourceSelect");
   const providerSection = document.getElementById("providerSection");
@@ -22,6 +30,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const generateBtn = document.getElementById("generateSummary");
   const summaryEl = document.getElementById("summary");
   const reduceStopwordsCheckbox = document.getElementById("reduceStopwords");
+
+  // Progress bar elements
+  const progressSection = document.getElementById("progressSection");
+  const progressBar = document.getElementById("progressBar");
+  const progressText = document.getElementById("progressText");
 
   // --------------------
   // Model Options
@@ -40,6 +53,37 @@ document.addEventListener("DOMContentLoaded", async () => {
     openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
     claude: ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"]
   };
+
+  // --------------------
+  // Progress Bar Functions
+  // --------------------
+  function showProgress(percent, message) {
+    progressSection.classList.remove("hidden");
+    
+    if (percent === null) {
+      // Indeterminate progress (pulsing animation)
+      progressBar.classList.add("loading");
+      progressBar.style.width = "100%";
+    } else {
+      progressBar.classList.remove("loading");
+      progressBar.style.width = percent + "%";
+    }
+    
+    progressText.textContent = message;
+  }
+
+  function hideProgress() {
+    progressSection.classList.add("hidden");
+    progressBar.classList.remove("loading");
+    progressBar.style.width = "0%";
+  }
+
+  // Listen for progress updates from offscreen document
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'summarizationProgress') {
+      showProgress(message.progress, message.status);
+    }
+  });
 
   // --------------------
   // Helpers
@@ -96,6 +140,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     updateModelDropdown();
+  }
+
+  // Helper functions for context labels
+  function getSentimentLabel(score) {
+    if (score > 5) return { text: "(very positive)", className: "positive" };
+    if (score > 2) return { text: "(positive)", className: "positive" };
+    if (score > 0) return { text: "(slightly positive)", className: "positive" };
+    if (score === 0) return { text: "(neutral)", className: "neutral" };
+    if (score > -2) return { text: "(slightly negative)", className: "negative" };
+    if (score > -5) return { text: "(negative)", className: "negative" };
+    return { text: "(very negative)", className: "negative" };
+  }
+
+  function getSubjectivityLabel(score) {
+    if (score > 0.15) return { text: "(highly subjective/opinion-based)", className: "neutral" };
+    if (score > 0.08) return { text: "(somewhat subjective)", className: "neutral" };
+    if (score > 0.03) return { text: "(mostly objective)", className: "neutral" };
+    return { text: "(objective/factual)", className: "neutral" };
   }
 
   // Helper: Get text from active tab
@@ -190,6 +252,15 @@ document.addEventListener("DOMContentLoaded", async () => {
           topKeywordsEl.textContent = nlp.topKeywords;
           sentimentScoreEl.textContent = nlp.sentimentScore;
           subjectivityScoreEl.textContent = nlp.subjectivityScore;
+
+          // Add context labels
+          const sentimentLabel = getSentimentLabel(nlp.sentimentScore);
+          sentimentLabelEl.textContent = sentimentLabel.text;
+          sentimentLabelEl.className = "context-label " + sentimentLabel.className;
+
+          const subjectivityLabel = getSubjectivityLabel(nlp.subjectivityScore);
+          subjectivityLabelEl.textContent = subjectivityLabel.text;
+          subjectivityLabelEl.className = "context-label " + subjectivityLabel.className;
         }
       );
     } catch (err) {
@@ -206,13 +277,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // --------------------
-  // SUMMARIZE Button - Independent
+  // SUMMARIZE Button - Independent with Progress
   // --------------------
   generateBtn.addEventListener("click", async () => {
     try {
       generateBtn.disabled = true;
       generateBtn.textContent = "Summarizing...";
       summaryEl.textContent = "Processing...";
+      
+      // Show initial progress
+      const source = sourceSelect.value;
+      if (source === "Default") {
+        showProgress(5, "Extracting article text...");
+      } else {
+        hideProgress(); // Don't show progress for API calls
+      }
 
       // Extract text from current tab
       const response = await getTextFromActiveTab();
@@ -222,13 +301,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       const text = useReduced ? response.reducedText : response.text;
 
       // Get model settings
-      const source = sourceSelect.value;
       let provider = null;
       let apiKey = null;
       const model = modelSelect.value;
 
       if (source === "Default") {
         provider = "transformers.js";
+        showProgress(8, "Initializing AI model...");
       } else if (source === "Local") {
         provider = "Ollama";
       } else if (source === "Online") {
@@ -240,6 +319,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       chrome.runtime.sendMessage(
         { action: "generateSummary", text, provider, apiKey, model },
         (summaryResponse) => {
+          hideProgress();
+          
           if (summaryResponse?.success) {
             summaryEl.textContent = summaryResponse.summary;
           } else {
@@ -249,6 +330,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       );
     } catch (err) {
       console.error("Summarize error:", err);
+      hideProgress();
       summaryEl.textContent = "Error extracting text: " + err.message;
     } finally {
       generateBtn.disabled = false;

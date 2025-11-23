@@ -15,8 +15,14 @@
     <p>Word count: <span id="wordCount">-</span></p>
     <p>Reading time: <span id="readingTime">-</span></p>
     <p>Top keywords: <span id="topKeywords">-</span></p>
-    <p>Sentiment score: <span id="sentimentScore">-</span></p>
-    <p>Subjectivity score: <span id="subjectivityScore">-</span></p>
+    <p>
+      Sentiment: <span id="sentimentScore">-</span> 
+      <span id="sentimentLabel" class="context-label"></span>
+    </p>
+    <p>
+      Subjectivity: <span id="subjectivityScore">-</span> 
+      <span id="subjectivityLabel" class="context-label"></span>
+    </p>
   </div>
 
   <!-- LLM Settings -->
@@ -53,6 +59,14 @@
   <!-- Summarization Section -->
   <div class="section">
     <button id="generateSummary">Summarize</button>
+  </div>
+  
+  <!-- Progress Bar (Hidden by default) -->
+  <div class="section hidden" id="progressSection">
+    <div class="progress-container">
+      <div id="progressBar" class="progress-bar"></div>
+    </div>
+    <p id="progressText" class="progress-text">Initializing...</p>
   </div>
   
   <div class="section">

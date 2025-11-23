@@ -41,94 +41,101 @@ function cleanText(text) {
 // Extract text from JSON-LD <script type="application/ld+json">
 function extractJSONLD() {
     const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+    let best = "";
 
     for (let script of scripts) {
         try {
             const json = JSON.parse(script.textContent);
-
-            // JSON-LD may contain an array of items
-            const items = Array.isArray(json) ? json : [json];
+            const items = Array.isArray(json["@graph"]) ? json["@graph"] :
+                          Array.isArray(json) ? json : [json];
 
             for (let item of items) {
-                let type = item["@type"];
+                const type = item["@type"];
+                const validType =
+                    type === "Article" ||
+                    type === "NewsArticle" ||
+                    type === "BlogPosting" ||
+                    (Array.isArray(type) && type.some(t =>
+                        ["Article","NewsArticle","BlogPosting"].includes(t)));
 
-                // Handle array-type entries
-                if (Array.isArray(type)) {
-                    if (!type.includes("Article") &&
-                        !type.includes("NewsArticle") &&
-                        !type.includes("BlogPosting")) continue;
-                } else if (!["Article", "NewsArticle", "BlogPosting"].includes(type)) {
-                    continue;
-                }
+                if (!validType) continue;
 
-                const text =
+                const body =
                     item.articleBody ||
                     item.text ||
                     item.description ||
                     "";
 
-                if (text && text.length > 50) return cleanText(text);
+                // Ignore short intros
+                if (body && body.length > best.length) {
+                    best = body;
+                }
             }
-        } catch (e) {
-            continue;
-        }
+        } catch (_) {}
     }
-    return "";
+
+    return best.length > 500 ? cleanText(best) : "";
 }
 
 // Extract meta descriptions / Open Graph
 function extractOpenGraph() {
     const candidates = [
+        'meta[property="og:article:content"]',
+        'meta[property="article:content"]',
+        'meta[name="twitter:text"]',
         'meta[property="og:description"]',
-        'meta[name="description"]',
-        'meta[property="twitter:description"]'
+        'meta[name="description"]'
     ];
 
-    for (let selector of candidates) {
+    let best = "";
+
+    for (const selector of candidates) {
         const value = document.querySelector(selector)?.content;
-        if (value && value.length > 40) return cleanText(value);
+        if (value && value.length > best.length) best = value;
     }
 
-    return "";
+    return best.length > 200 ? cleanText(best) : "";
 }
 
 // DOM scraping fallback
 function extractFromDOM() {
-    let article = document.querySelector("article");
+    const selectors = [
+        "article p", "article div",
+        "main p", "main div",
+        "section p", "section div",
+        "p", "div"
+    ];
 
-    if (article) {
-        return cleanText(article.innerText);
+    const nodes = [...document.querySelectorAll(selectors.join(","))];
+
+    const chunks = [];
+
+    for (const n of nodes) {
+        const t = n.innerText?.trim();
+        if (!t) continue;
+        if (t.length < 25) continue;  // skip tiny crumbs
+        if (/^(advertisement|subscribe|related|cookies)/i.test(t)) continue;
+        chunks.push(t);
     }
 
-    const paragraphs = Array.from(document.querySelectorAll("p"))
-        .map(p => p.innerText)
-        .filter(t => t.trim().length > 40);
+    // Deduplicate and join
+    const text = [...new Set(chunks)].join("\n\n");
 
-    if (paragraphs.length > 0) {
-        return cleanText(paragraphs.join("\n\n"));
-    }
-
-    return "";
+    return cleanText(text);
 }
 
 // --------------------
 // Main Extraction Function
 // --------------------
 function extractArticle() {
-    let text = extractJSONLD();
-    let source = "JSON-LD";
+    let json = extractJSONLD();
+    if (json) return { text: json, source: "JSON-LD" };
 
-    if (!text) {
-        text = extractOpenGraph();
-        source = "OpenGraph / Meta";
-    }
+    let og = extractOpenGraph();
+    if (og) return { text: og, source: "OpenGraph" };
 
-    if (!text) {
-        text = extractFromDOM();
-        source = "DOM Fallback";
-    }
-
-    return { text, source };
+    const dom = extractFromDOM();
+    return { text: dom, source: "DOM" };
 }
 
 // --------------------
