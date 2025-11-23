@@ -1,11 +1,5 @@
 document.addEventListener("DOMContentLoaded", async () => {
 
-  // DEBUG: Check if elements exist
-  console.log("Progress elements check:", {
-    progressSection: document.getElementById("progressSection"),
-    progressBar: document.getElementById("progressBar"),
-    progressText: document.getElementById("progressText")
-  });
   // --------------------
   // UI Elements
   // --------------------
@@ -39,7 +33,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // --------------------
   // Model Options
   // --------------------
-  const defaultModels = ["distilbart-cnn-12-6", "t5-small", "t5-base"];
+  const defaultModels = [
+    "Xenova/distilbart-cnn-6-6",
+    "Xenova/flan-t5-small",
+    "Xenova/flan-t5-base"
+  ];
 
   const localBackends = {
     Ollama: [
@@ -296,9 +294,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Extract text from current tab
       const response = await getTextFromActiveTab();
       
-      // Use reduced or original text based on checkbox
+      // Use filtered text (no references) for summarization
       const useReduced = reduceStopwordsCheckbox.checked;
-      const text = useReduced ? response.reducedText : response.text;
+      const text = useReduced ? response.reducedTextForSummary : response.textForSummary;
 
       // Get model settings
       let provider = null;

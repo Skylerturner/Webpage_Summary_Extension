@@ -26,7 +26,7 @@ async function ensureOffscreenDocument() {
     // Create offscreen document
     offscreenCreating = chrome.offscreen.createDocument({
       url: 'offscreen.html',
-      reasons: ['WORKERS', 'FETCH', 'BLOBS'],
+      reasons: ['WORKERS'],
       justification: 'Run transformers.js for local AI summarization'
     });
 

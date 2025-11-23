@@ -1,22 +1,20 @@
 // offscreen.js
-// Handles summarization and progress reporting
+// Handles summarization using transformers.js as an ES6 module
+
+// Import transformers.js as a module
+import { pipeline, env } from './transformers.js';
 
 console.log("Offscreen.js loaded");
+console.log("✅ Transformers.js imported successfully");
 
-// Wait for Transformers.js to be available
-async function waitForTransformers() {
-  let attempts = 0;
-  while (!window.transformers && attempts < 100) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    attempts++;
-  }
-  if (!window.transformers) throw new Error("Transformers.js failed to load.");
-  return window.transformers;
-}
+// Configure environment for Chrome extension - USE LOCAL FILES
+env.allowLocalModels = false;
+env.allowRemoteModels = true;
+env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('transformers/');  // Point to transformers subfolder
+// Note: WebGPU is now enabled via device: "webgpu" parameter in pipeline() call
 
 // Pipeline cache
 const pipelineCache = {};
-const modelLoadingState = {};
 
 function sendProgress(progress, status) {
   chrome.runtime.sendMessage({
@@ -65,10 +63,21 @@ function chunkText(text, maxTokensPerChunk = 400) {
 }
 
 // Summarize a single chunk
-async function summarizeChunk(transformers, text, model) {
+async function summarizeChunk(text, model) {
   if (!pipelineCache[model]) {
     sendProgress(15, `Loading model ${model}...`);
-    pipelineCache[model] = await transformers.pipeline("summarization", model);
+    
+    // Try WebGPU first, fall back to WASM if unavailable
+    try {
+      pipelineCache[model] = await pipeline("summarization", model, { 
+        device: "webgpu"  // Use GPU acceleration
+      });
+      console.log("✅ Using WebGPU acceleration");
+    } catch (e) {
+      console.log("⚠️ WebGPU not available, falling back to WASM");
+      pipelineCache[model] = await pipeline("summarization", model);
+    }
+    
     sendProgress(50, "Model ready!");
   }
 
@@ -82,12 +91,17 @@ async function summarizeChunk(transformers, text, model) {
 
 // Main summarization function
 async function summarizeWithTransformersJS(text, model = "distilbart-cnn-12-6") {
-  const transformers = await waitForTransformers();
-
   const tokens = estimateTokens(text);
-  const maxTokens = model.includes("bart") ? 1024 : 512;
+  
+  // Warn for very large articles (may be slow/crash)
+  if (tokens > 5000) {
+    sendProgress(5, `Large article (${tokens} tokens) - this may take several minutes...`);
+  }
+  
+  // Use smaller context for better memory management
+  const maxTokens = model.includes("bart") ? 512 : 400;  // Reduced from 1024/512
 
-  if (tokens < maxTokens * 0.8) return await summarizeChunk(transformers, text, model);
+  if (tokens < maxTokens * 0.8) return await summarizeChunk(text, model);
 
   const chunks = chunkText(text, Math.floor(maxTokens * 0.8));
   sendProgress(10, `Processing ${chunks.length} chunks...`);
@@ -95,7 +109,7 @@ async function summarizeWithTransformersJS(text, model = "distilbart-cnn-12-6") 
   const summaries = [];
   for (let i = 0; i < chunks.length; i++) {
     sendProgress(10 + ((i / chunks.length) * 70), `Summarizing chunk ${i + 1}/${chunks.length}...`);
-    const summary = await summarizeChunk(transformers, chunks[i], model);
+    const summary = await summarizeChunk(chunks[i], model);
     summaries.push(summary);
   }
 
@@ -104,7 +118,7 @@ async function summarizeWithTransformersJS(text, model = "distilbart-cnn-12-6") 
   if (estimateTokens(combined) > maxTokens * 0.8) {
     return "SUMMARY (Multi-part):\n\n" + summaries.map((s, i) => `Part ${i + 1}: ${s}`).join("\n\n");
   }
-  return await summarizeChunk(transformers, combined, model);
+  return await summarizeChunk(combined, model);
 }
 
 // Listen for summarization requests
