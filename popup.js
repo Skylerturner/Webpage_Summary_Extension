@@ -163,10 +163,38 @@ document.addEventListener("DOMContentLoaded", async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
     return new Promise((resolve, reject) => {
-      chrome.tabs.sendMessage(tab.id, { action: "extractText" }, (response) => {
+      chrome.tabs.sendMessage(tab.id, { action: "extractText" }, async (response) => {
         if (chrome.runtime.lastError) {
           reject(chrome.runtime.lastError);
-        } else if (!response?.text) {
+          return;
+        }
+        
+        // If it's a PDF, ask background script to extract text
+        if (response?.pdfUrl) {
+          console.log("PDF detected, fetching text from background script...");
+          
+          chrome.runtime.sendMessage(
+            { action: "extractPDF", pdfUrl: response.pdfUrl },
+            (pdfResponse) => {
+              if (pdfResponse?.success) {
+                // Return in same format as regular text extraction
+                resolve({
+                  text: pdfResponse.text,
+                  textForSummary: pdfResponse.text,
+                  reducedText: pdfResponse.text,  // PDFs don't need stopword removal here
+                  reducedTextForSummary: pdfResponse.text,
+                  source: "PDF"
+                });
+              } else {
+                reject(new Error(pdfResponse?.error || "PDF extraction failed"));
+              }
+            }
+          );
+          return;
+        }
+        
+        // Regular text extraction
+        if (!response?.text) {
           reject(new Error("No text extracted"));
         } else {
           resolve(response);

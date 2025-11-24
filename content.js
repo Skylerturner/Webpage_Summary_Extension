@@ -226,10 +226,14 @@ function extractPDFText() {
 // Main Extraction Function
 // --------------------
 function extractArticle(filterReferences = false) {
-    // Check if this is a PDF
-    if (document.contentType === 'application/pdf' || window.location.href.toLowerCase().endsWith('.pdf')) {
-        const pdfText = extractPDFText();
-        if (pdfText) return { text: pdfText, source: "PDF" };
+    // Check if this is a PDF - return URL for background script to process
+    const pdfEmbed = document.querySelector('embed#plugin[type="application/x-google-chrome-pdf"]');
+    if (pdfEmbed) {
+        const pdfUrl = pdfEmbed.getAttribute('original-url');
+        if (pdfUrl) {
+            console.log("PDF detected:", pdfUrl);
+            return { text: "", pdfUrl: pdfUrl, source: "PDF" };
+        }
     }
     
     // Try JSON-LD first, but only if it has substantial content
@@ -258,6 +262,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === "extractText") {
         // Extract full text (for NLP analysis)
         const fullExtraction = extractArticle(false);  // Don't filter references
+        
+        // If it's a PDF, return the URL for background script to process
+        if (fullExtraction.pdfUrl) {
+            sendResponse({
+                pdfUrl: fullExtraction.pdfUrl,
+                source: "PDF"
+            });
+            return;
+        }
         
         // Extract filtered text (for summarization)
         const filteredExtraction = extractArticle(true);  // Filter references

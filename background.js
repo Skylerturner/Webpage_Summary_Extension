@@ -2,6 +2,7 @@
 // Handles LLM API calls and messages from popup.js with smart chunking
 
 import { STOPWORDS, POSITIVE_WORDS, NEGATIVE_WORDS, SUBJECTIVE_WORDS } from './nlp-dict.js';
+import { extractPDFText } from './pdf-helper.js';
 
 // ========================================
 // Offscreen Document Management
@@ -26,7 +27,7 @@ async function ensureOffscreenDocument() {
     // Create offscreen document
     offscreenCreating = chrome.offscreen.createDocument({
       url: 'offscreen.html',
-      reasons: ['WORKERS'],
+      reasons: ['WORKERS', 'FETCH', 'BLOBS'],
       justification: 'Run transformers.js for local AI summarization'
     });
 
@@ -342,6 +343,14 @@ function computeNLP(text) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const { action, provider, model, apiKey, text } = message;
+
+  if (action === "extractPDF") {
+    extractPDFText(message.pdfUrl)
+      .then(text => sendResponse({ success: true, text }))
+      .catch(err => sendResponse({ success: false, error: err.message || String(err) }));
+    
+    return true; // Keep channel open for async response
+  }
 
   if (action === "generateSummary") {
     summarizeLongText(text, provider, apiKey, model)
