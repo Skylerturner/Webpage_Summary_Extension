@@ -1,290 +1,231 @@
 // content.js
-// Extracts article content when popup requests it
+// Extracts article content from web pages and PDFs
 
-// --------------------
-// Helper Functions
-// --------------------
+// ========================================
+// Text Cleaning Utilities
+// ========================================
 
-// Remove stopwords
-function removeStopwords(text) {
-    const stopwordSet = new Set([
-        "the","a","an","and","or","of","in","on","for","with","to","by",
-        "is","are","was","were","be","been","being",
-        "this","that","these","those",
-        "it","its","as","at","from","so"
-    ]);
-
-    // Critical stopwords to keep because they affect meaning
-    const critical = new Set(["not","but","however","yet","although","because"]);
-
-    return text
-        .split(/\b/)
-        .map(token => {
-            const word = token.toLowerCase();
-            if (critical.has(word)) return token;
-            if (stopwordSet.has(word)) return "";
-            return token;
-        })
-        .join("")
-        .replace(/\s+/g, " ")
-        .trim();
-}
-
-// Normalize text spacing
+/**
+ * Normalize whitespace and line breaks in extracted text
+ */
 function cleanText(text) {
-    return text
-        .replace(/\s+/g, " ")
-        .replace(/\n\s*\n/g, "\n")
-        .trim();
+  return text
+    .replace(/\s+/g, " ")           // Collapse multiple spaces
+    .replace(/\n\s*\n/g, "\n")      // Remove excessive line breaks
+    .trim();
 }
 
-// Extract text from JSON-LD <script type="application/ld+json">
-function extractJSONLD() {
-    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-    let best = "";
+// ========================================
+// Extraction Methods
+// ========================================
 
-    for (let script of scripts) {
-        try {
-            const json = JSON.parse(script.textContent);
-            const items = Array.isArray(json["@graph"]) ? json["@graph"] :
-                          Array.isArray(json) ? json : [json];
+/**
+ * Extract article content from JSON-LD structured data
+ * Looks for Article, NewsArticle, or BlogPosting schema types
+ */
+function extractFromJSONLD() {
+  const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+  let bestContent = "";
 
-            for (let item of items) {
-                const type = item["@type"];
-                const validType =
-                    type === "Article" ||
-                    type === "NewsArticle" ||
-                    type === "BlogPosting" ||
-                    (Array.isArray(type) && type.some(t =>
-                        ["Article","NewsArticle","BlogPosting"].includes(t)));
-
-                if (!validType) continue;
-
-                const body =
-                    item.articleBody ||
-                    item.text ||
-                    item.description ||
-                    "";
-
-                // Ignore short intros
-                if (body && body.length > best.length) {
-                    best = body;
-                }
-            }
-        } catch (_) {}
-    }
-
-    return best.length > 500 ? cleanText(best) : "";
-}
-
-// Extract meta descriptions / Open Graph
-function extractOpenGraph() {
-    const candidates = [
-        'meta[property="og:article:content"]',
-        'meta[property="article:content"]',
-        'meta[name="twitter:text"]',
-        'meta[property="og:description"]',
-        'meta[name="description"]'
-    ];
-
-    let best = "";
-
-    for (const selector of candidates) {
-        const value = document.querySelector(selector)?.content;
-        if (value && value.length > best.length) best = value;
-    }
-
-    return best.length > 200 ? cleanText(best) : "";
-}
-
-// DOM scraping fallback
-function extractFromDOM(filterReferences = false) {
-    // Get ALL paragraph tags from the entire page
-    const allParagraphs = [...document.querySelectorAll('p')];
-    
-    const chunks = [];
-    
-    for (const p of allParagraphs) {
-        // Skip if paragraph is inside unwanted elements
-        const parent = p.closest('nav, header, footer, aside, [role="navigation"], [role="banner"], [role="complementary"]');
-        if (parent) continue;
-        
-        const t = p.innerText?.trim();
-        if (!t || t.length < 50) continue;  // Only substantial paragraphs
-        
-        // Filter out common junk patterns
-        const junkPatterns = [
-            /^(advertisement|subscribe|related|cookies|sign up|share|follow|menu|navigation|search|footer|header)/i,
-            /press escape/i,
-            /follow us/i,
-            /instagram|facebook|twitter|x\.com/i,
-            /default settings/i,
-            /close.*window/i,
-            /cancel.*close/i,
-            /skip to/i,
-            /jump to/i,
-            /view all|see all|read more|load more/i,
-            /^\s*x\s*$/i,
-            /email updates/i,
-            /privacy policy/i,
-            /terms.*service/i
-        ];
-        
-        // Additional filters for summarization only (not NLP)
-        if (filterReferences) {
-            const referencePatterns = [
-                /^(doi|pmid|issn):/i,
-                /springer nature/i,
-                /copyright.*\d{4}/i,
-                /all rights reserved/i,
-                /^\d{1,3},\s*\d+–\d+\s*\(\d{4}\)/,  // "123, 456-789 (2020)" citation format
-                /^[A-Z][a-z]+,\s+[A-Z]\.\s+[A-Z]\./,  // "Smith, J. A." author format
-                /shareable link/i,
-                /peer review/i,
-                /received.*accepted.*published/i,
-                /geophys\.|sci\.|lett\.|res\./i  // Journal abbreviations
-            ];
-            junkPatterns.push(...referencePatterns);
-        }
-        
-        if (junkPatterns.some(pattern => pattern.test(t))) continue;
-        
-        // Skip if mostly uppercase (likely headings/UI)
-        const upperCaseRatio = (t.match(/[A-Z]/g) || []).length / t.length;
-        if (upperCaseRatio > 0.5) continue;
-        
-        // Skip if it's mostly repeated words
-        const words = t.split(/\s+/);
-        const uniqueWords = new Set(words);
-        if (words.length > 10 && uniqueWords.size / words.length < 0.3) continue;
-        
-        chunks.push(t);
-    }
-
-    // Deduplicate and join
-    const text = [...new Set(chunks)].join("\n\n");
-
-    return cleanText(text);
-}
-
-// --------------------
-// PDF Text Extraction
-// --------------------
-function extractPDFText() {
+  for (const script of scripts) {
     try {
-        // Method 1: Try to get text from Chrome's PDF viewer embed
-        const embed = document.querySelector('embed[type="application/pdf"]');
-        if (embed) {
-            // Chrome's PDF viewer doesn't expose text directly via DOM
-            // We need to use selection API
-            
-            // Select all text in the document
-            const selection = window.getSelection();
-            selection.selectAllChildren(document.body);
-            const text = selection.toString();
-            selection.removeAllRanges();
-            
-            if (text && text.length > 100) {
-                console.log("Extracted PDF text via selection");
-                return cleanText(text);
-            }
+      const json = JSON.parse(script.textContent);
+      
+      // Handle both single objects and arrays
+      const items = Array.isArray(json["@graph"]) ? json["@graph"] :
+                    Array.isArray(json) ? json : [json];
+
+      for (const item of items) {
+        const type = item["@type"];
+        
+        // Check if this is an article-type schema
+        const isArticle = type === "Article" ||
+                         type === "NewsArticle" ||
+                         type === "BlogPosting" ||
+                         (Array.isArray(type) && type.some(t => 
+                           ["Article", "NewsArticle", "BlogPosting"].includes(t)));
+
+        if (!isArticle) continue;
+
+        // Extract article body
+        const body = item.articleBody || item.text || item.description || "";
+
+        // Keep the longest article body found (ignoring short snippets)
+        if (body && body.length > bestContent.length) {
+          bestContent = body;
         }
-        
-        // Method 2: Try iframe approach (some PDFs load this way)
-        const iframe = document.querySelector('iframe');
-        if (iframe) {
-            try {
-                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                const iframeText = iframeDoc.body.innerText;
-                if (iframeText && iframeText.length > 100) {
-                    console.log("Extracted PDF text from iframe");
-                    return cleanText(iframeText);
-                }
-            } catch (e) {
-                // Cross-origin iframe, can't access
-                console.log("Cannot access iframe (cross-origin)");
-            }
-        }
-        
-        // Method 3: Fallback - try to get any text from the page
-        const bodyText = document.body.innerText;
-        if (bodyText && bodyText.length > 100) {
-            console.log("Extracted PDF text from body");
-            return cleanText(bodyText);
-        }
-        
-        console.log("Could not extract text from PDF");
-        return "";
-        
-    } catch (err) {
-        console.error("PDF extraction error:", err);
-        return "";
+      }
+    } catch (e) {
+      // Invalid JSON, skip this script tag
+      continue;
     }
+  }
+
+  // Only return if we found substantial content (not just a meta description)
+  return bestContent.length > 500 ? cleanText(bestContent) : "";
 }
 
-// --------------------
+/**
+ * Extract article content from Open Graph and meta tags
+ * Used as fallback when JSON-LD is not available
+ */
+function extractFromOpenGraph() {
+  const metaSelectors = [
+    'meta[property="og:article:content"]',
+    'meta[property="article:content"]',
+    'meta[name="twitter:text"]',
+    'meta[property="og:description"]',
+    'meta[name="description"]'
+  ];
+
+  let bestContent = "";
+
+  for (const selector of metaSelectors) {
+    const meta = document.querySelector(selector);
+    const content = meta?.content || "";
+    
+    if (content.length > bestContent.length) {
+      bestContent = content;
+    }
+  }
+
+  // Only return if it's more than a brief description
+  return bestContent.length > 200 ? cleanText(bestContent) : "";
+}
+
+/**
+ * Extract article content by scraping DOM paragraphs
+ * Most reliable method for full articles, with aggressive filtering
+ */
+function extractFromDOM(filterReferences = false) {
+  const allParagraphs = [...document.querySelectorAll('p')];
+  const validParagraphs = [];
+  
+  for (const p of allParagraphs) {
+    // Skip paragraphs inside navigation, headers, footers, etc.
+    if (p.closest('nav, header, footer, aside, [role="navigation"], [role="banner"], [role="complementary"]')) {
+      continue;
+    }
+    
+    const text = p.innerText?.trim();
+    if (!text || text.length < 50) continue;  // Only substantial paragraphs
+    
+    // Filter out common UI/junk patterns
+    const junkPatterns = [
+      /^(advertisement|subscribe|related|cookies|sign up|share|follow|menu|navigation|search)/i,
+      /press escape|skip to|jump to/i,
+      /view all|see all|read more|load more/i,
+      /email updates|privacy policy|terms.*service/i,
+      /instagram|facebook|twitter|x\.com/i,
+      /^\s*x\s*$/i  // Single "X" (close button)
+    ];
+    
+    // Additional filters for academic references/citations (when filtering for summary)
+    if (filterReferences) {
+      const referencePatterns = [
+        /^(doi|pmid|issn):/i,
+        /springer nature|copyright.*\d{4}|all rights reserved/i,
+        /^\d{1,3},\s*\d+–\d+\s*\(\d{4}\)/,  // Citation format: "123, 456-789 (2020)"
+        /^[A-Z][a-z]+,\s+[A-Z]\.\s+[A-Z]\./,  // Author format: "Smith, J. A."
+        /shareable link|peer review|received.*accepted.*published/i,
+        /geophys\.|sci\.|lett\.|res\./i  // Journal abbreviations
+      ];
+      junkPatterns.push(...referencePatterns);
+    }
+    
+    if (junkPatterns.some(pattern => pattern.test(text))) {
+      continue;
+    }
+    
+    // Skip if mostly uppercase (likely headings/UI elements)
+    const upperCaseRatio = (text.match(/[A-Z]/g) || []).length / text.length;
+    if (upperCaseRatio > 0.5) continue;
+    
+    // Skip if mostly repeated words (likely UI/navigation)
+    const words = text.split(/\s+/);
+    const uniqueWords = new Set(words);
+    if (words.length > 10 && uniqueWords.size / words.length < 0.3) {
+      continue;
+    }
+    
+    validParagraphs.push(text);
+  }
+
+  // Deduplicate paragraphs and join
+  const uniqueParagraphs = [...new Set(validParagraphs)];
+  return cleanText(uniqueParagraphs.join("\n\n"));
+}
+
+// ========================================
 // Main Extraction Function
-// --------------------
+// ========================================
+
+/**
+ * Extract article text using multiple strategies
+ * @param {boolean} filterReferences - Whether to filter out academic references
+ * @returns {Object} Extraction result with text and source method
+ */
 function extractArticle(filterReferences = false) {
-    // Check if this is a PDF - return URL for background script to process
-    const pdfEmbed = document.querySelector('embed#plugin[type="application/x-google-chrome-pdf"]');
-    if (pdfEmbed) {
-        const pdfUrl = pdfEmbed.getAttribute('original-url');
-        if (pdfUrl) {
-            console.log("PDF detected:", pdfUrl);
-            return { text: "", pdfUrl: pdfUrl, source: "PDF" };
-        }
+  // Check if this is a PDF - return URL for background script to process
+  const pdfEmbed = document.querySelector('embed#plugin[type="application/x-google-chrome-pdf"]');
+  if (pdfEmbed) {
+    const pdfUrl = pdfEmbed.getAttribute('original-url');
+    if (pdfUrl) {
+      console.log("PDF detected:", pdfUrl);
+      return { text: "", pdfUrl: pdfUrl, source: "PDF" };
     }
-    
-    // Try JSON-LD first, but only if it has substantial content
-    let json = extractJSONLD();
-    if (json && json.length > 1000) return { text: json, source: "JSON-LD" };
+  }
+  
+  // Strategy 1: Try JSON-LD structured data (best for news sites)
+  const jsonLD = extractFromJSONLD();
+  if (jsonLD && jsonLD.length > 1000) {
+    return { text: jsonLD, source: "JSON-LD" };
+  }
 
-    // Try DOM extraction (most reliable for full articles)
-    const dom = extractFromDOM(filterReferences);
-    if (dom && dom.length > 500) return { text: dom, source: "DOM" };
+  // Strategy 2: DOM scraping (most reliable for full articles)
+  const dom = extractFromDOM(filterReferences);
+  if (dom && dom.length > 500) {
+    return { text: dom, source: "DOM" };
+  }
 
-    // Fallback to OpenGraph if DOM didn't work
-    let og = extractOpenGraph();
-    if (og) return { text: og, source: "OpenGraph" };
-    
-    // Last resort: return whatever we got, even if short
-    if (json) return { text: json, source: "JSON-LD (short)" };
-    if (dom) return { text: dom, source: "DOM (short)" };
-    
-    return { text: "", source: "None" };
+  // Strategy 3: Open Graph / meta tags (fallback)
+  const og = extractFromOpenGraph();
+  if (og) {
+    return { text: og, source: "OpenGraph" };
+  }
+  
+  // Last resort: return whatever we got, even if short
+  if (jsonLD) return { text: jsonLD, source: "JSON-LD (short)" };
+  if (dom) return { text: dom, source: "DOM (short)" };
+  
+  return { text: "", source: "None" };
 }
 
-// --------------------
-// LISTEN for popup requests
-// --------------------
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.action === "extractText") {
-        // Extract full text (for NLP analysis)
-        const fullExtraction = extractArticle(false);  // Don't filter references
-        
-        // If it's a PDF, return the URL for background script to process
-        if (fullExtraction.pdfUrl) {
-            sendResponse({
-                pdfUrl: fullExtraction.pdfUrl,
-                source: "PDF"
-            });
-            return;
-        }
-        
-        // Extract filtered text (for summarization)
-        const filteredExtraction = extractArticle(true);  // Filter references
-        
-        // Apply stopword removal if needed
-        const reducedFull = removeStopwords(fullExtraction.text);
-        const reducedFiltered = removeStopwords(filteredExtraction.text);
+// ========================================
+// Message Listener
+// ========================================
 
-        sendResponse({ 
-            text: fullExtraction.text,              // Full text for NLP
-            textForSummary: filteredExtraction.text,  // Filtered text for summarization
-            reducedText: reducedFull,                 // Stopwords removed (full)
-            reducedTextForSummary: reducedFiltered,   // Stopwords removed (filtered)
-            source: fullExtraction.source
-        });
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === "extractText") {
+    // Extract full text (no filtering - for NLP analysis)
+    const fullExtraction = extractArticle(false);
+    
+    // If it's a PDF, return the URL for background script to process
+    if (fullExtraction.pdfUrl) {
+      sendResponse({
+        pdfUrl: fullExtraction.pdfUrl,
+        source: "PDF"
+      });
+      return;
     }
+    
+    // Extract filtered text (remove references - for summarization)
+    const filteredExtraction = extractArticle(true);
+
+    sendResponse({ 
+      text: fullExtraction.text,              // Full text for NLP analysis
+      textForSummary: filteredExtraction.text, // Filtered text for summarization
+      source: fullExtraction.source
+    });
+  }
 });

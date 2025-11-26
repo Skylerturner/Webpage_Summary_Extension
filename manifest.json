@@ -1,8 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Smart Article Summarizer",
-  "version": "1.0",
-  "description": "Intelligently extracts and summarizes web articles using NLP and free LLM options",
+  "version": "1.0.0",
+  "description": "Intelligently extracts and summarizes web articles using local AI - completely private, no API keys required",
+  "author": "Skyler Turner",
+  
   "permissions": [
     "storage",
     "tabs",
@@ -12,19 +14,16 @@
   ],
 
   "host_permissions": [
-    "http://localhost:11434/*",
-    "https://api.openai.com/*",
-    "https://api.anthropic.com/*",
-    "https://cdn.jsdelivr.net/*",
     "https://huggingface.co/*"
   ],
 
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; object-src 'self'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
 
   "action": {
     "default_popup": "popup.html",
+    "default_title": "Summarize Article",
     "default_icon": {
       "16": "icon16.png",
       "48": "icon48.png",
@@ -47,9 +46,7 @@
 
   "web_accessible_resources": [
     {
-      "resources": [
-        "pdf-lib/*.mjs"
-      ],
+      "resources": ["pdf-lib/*.mjs"],
       "matches": ["<all_urls>"]
     }
   ],

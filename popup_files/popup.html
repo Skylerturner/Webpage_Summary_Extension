@@ -25,35 +25,11 @@
     </p>
   </div>
 
-  <!-- LLM Settings -->
+  <!-- Model Info -->
   <div class="section">
-    <h2>Model Source</h2>
-    <label for="sourceSelect">Select source:</label>
-    <select id="sourceSelect">
-      <option value="Default">Default (transformers.js)</option>
-      <option value="Local">Local (Ollama)</option>
-      <option value="Online">Online (Personal API Key)</option>
-    </select>
-  </div>
-
-  <div class="section hidden" id="providerSection">
-    <label for="providerSelect">Select provider:</label>
-    <select id="providerSelect"></select>
-  </div>
-
-  <div class="section hidden" id="localSection">
-    <label for="localBackendSelect">Select local backend:</label>
-    <select id="localBackendSelect"></select>
-  </div>
-
-  <div class="section hidden" id="apiKeySection">
-    <label for="apiKey">API Key:</label>
-    <input type="password" id="apiKey" placeholder="Enter your API key">
-  </div>
-
-  <div class="section">
-    <label for="modelSelect">Select model:</label>
-    <select id="modelSelect"></select>
+    <h2>AI Model</h2>
+    <p>Model: <strong>DistilBART-CNN</strong></p>
+    <p class="model-info">Fast, private summarization running locally in your browser</p>
   </div>
 
   <!-- Summarization Section -->
@@ -68,13 +44,6 @@
     </div>
     <p id="progressText" class="progress-text">Initializing...</p>
   </div>
-  
-  <div class="section">
-  <label>
-    <input type="checkbox" id="reduceStopwords">
-    Reduce stopwords before sending text to LLM (experimental)
-  </label>
-</div>
 
   <div class="section">
     <h2>Summary</h2>
