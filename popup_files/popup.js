@@ -1,4 +1,11 @@
+// Debug flag - set to true for development logging
+// DEBUG is imported from config.js
+
+// Import configuration constants
+import { MODEL_ID, MODEL_DISPLAY_NAME, DEBUG, PDF_EXTRACTION_TIMEOUT, SUMMARIZATION_TIMEOUT, NLP_TIMEOUT, CONTENT_SCRIPT_TIMEOUT, MAX_NLP_TEXT_LENGTH } from '../config.js';
+
 document.addEventListener("DOMContentLoaded", async () => {
+  if (DEBUG) console.log("Popup loaded");
 
   // --------------------
   // UI Elements
@@ -16,12 +23,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const summaryEl = document.getElementById("summary");
 
   // Hardcoded model
-  const MODEL = "Xenova/distilbart-cnn-6-6";
+  const MODEL = MODEL_ID;
 
   // Progress bar elements
   const progressSection = document.getElementById("progressSection");
   const progressBar = document.getElementById("progressBar");
   const progressText = document.getElementById("progressText");
+
+  if (DEBUG) console.log("All UI elements found");
 
   // --------------------
   // Progress Bar Functions
@@ -30,7 +39,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     progressSection.classList.remove("hidden");
     
     if (percent === null) {
-      // Indeterminate progress (pulsing animation)
       progressBar.classList.add("loading");
       progressBar.style.width = "100%";
     } else {
@@ -47,7 +55,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     progressBar.style.width = "0%";
   }
 
-  // Listen for progress updates from offscreen document
+  // Listen for progress updates
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'summarizationProgress') {
       showProgress(message.progress, message.status);
@@ -74,41 +82,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     return { text: "(objective/factual)", className: "neutral" };
   }
 
-  // Helper: Get text from active tab
-  async function getTextFromActiveTab() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
+  // --------------------
+  // Improved Message Sending
+  // --------------------
+  
+  function sendMessageWithTimeout(message, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
-      chrome.tabs.sendMessage(tab.id, { action: "extractText" }, async (response) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Request timed out after ${timeoutMs/1000}s`));
+      }, timeoutMs);
+
+      chrome.runtime.sendMessage(message, (response) => {
+        clearTimeout(timeout);
+        
         if (chrome.runtime.lastError) {
-          reject(chrome.runtime.lastError);
-          return;
-        }
-        
-        // If it's a PDF, ask background script to extract text
-        if (response?.pdfUrl) {
-          console.log("PDF detected, fetching text from background script...");
-          
-          chrome.runtime.sendMessage(
-            { action: "extractPDF", pdfUrl: response.pdfUrl },
-            (pdfResponse) => {
-              if (pdfResponse?.success) {
-                resolve({
-                  text: pdfResponse.text,
-                  textForSummary: pdfResponse.text,
-                  source: "PDF"
-                });
-              } else {
-                reject(new Error(pdfResponse?.error || "PDF extraction failed"));
-              }
-            }
-          );
-          return;
-        }
-        
-        // Regular text extraction
-        if (!response?.text) {
-          reject(new Error("No text extracted"));
+          reject(new Error(chrome.runtime.lastError.message));
         } else {
           resolve(response);
         }
@@ -117,46 +105,163 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --------------------
+  // Get Text from Active Tab
+  // --------------------
+  
+  async function getTextFromActiveTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    if (DEBUG) console.log("Getting text from tab:", tab.url);
+    
+    // Check if this is a restricted page
+    const restrictedPages = [
+      'chrome://', 'chrome-extension://', 'edge://', 'about:', 
+      'data:', 'view-source:', 'chrome.google.com/webstore'
+    ];
+    
+    if (restrictedPages.some(prefix => tab.url.startsWith(prefix))) {
+      throw new Error("Cannot run on this page. Please navigate to a regular website or PDF.");
+    }
+    
+    // Helper to send message to content script
+    const sendToContentScript = () => {
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("TIMEOUT"));
+        }, CONTENT_SCRIPT_TIMEOUT);
+
+        chrome.tabs.sendMessage(tab.id, { action: "extractText" }, (response) => {
+          clearTimeout(timeout);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      });
+    };
+    
+    // Try to get text from content script
+    let response;
+    try {
+      response = await sendToContentScript();
+    } catch (error) {
+      // If content script not loaded, try injecting it
+      if (error.message.includes("Receiving end does not exist")) {
+        if (DEBUG) console.log("Content script not found, injecting...");
+        
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['content.js']
+          });
+          
+          await new Promise(resolve => setTimeout(resolve, 100));
+          if (DEBUG) console.log("Retrying after injection...");
+          response = await sendToContentScript();
+        } catch (injectError) {
+          throw new Error("Content script failed to load. Please reload the page and try again.");
+        }
+      } else {
+        throw error;
+      }
+    }
+    
+    if (DEBUG) console.log("Content script response:", response?.source);
+    
+    // Handle PDF extraction
+    if (response?.pdfUrl) {
+      if (DEBUG) console.log("PDF detected, requesting extraction...");
+      
+      const pdfResponse = await sendMessageWithTimeout(
+        { action: "extractPDF", pdfUrl: response.pdfUrl },
+        PDF_EXTRACTION_TIMEOUT
+      );
+      
+      if (pdfResponse?.success) {
+        if (DEBUG) console.log("PDF text received:", pdfResponse.text.length, "characters");
+        return {
+          text: pdfResponse.text,
+          textForSummary: pdfResponse.text,
+          source: "PDF"
+        };
+      } else {
+        throw new Error(pdfResponse?.error || "PDF extraction failed");
+      }
+    }
+    
+    // Handle regular text extraction
+    if (!response?.text) {
+      throw new Error("No text extracted from page");
+    }
+    
+    if (DEBUG) console.log("Extracted:", response.text.length, "characters");
+    return response;
+  }
+
+
+  // --------------------
   // ANALYZE Button
   // --------------------
+  
   analyzeBtn.addEventListener("click", async () => {
     try {
       analyzeBtn.disabled = true;
       analyzeBtn.textContent = "Analyzing...";
+      
+      if (DEBUG) console.log("Starting analysis...");
+      
+      // Show progress for PDFs
+      showProgress(null, "Extracting text...");
 
       const response = await getTextFromActiveTab();
+      
+      if (DEBUG) console.log("Text extracted, length:", response.text.length);
+      
+      // For very large texts (like PDFs), truncate to first 50,000 characters for NLP
+      // This prevents timeouts while still being representative
+      let textForNLP = response.text;
+      if (textForNLP.length > MAX_NLP_TEXT_LENGTH) {
+        if (DEBUG) console.log("Text too long, truncating to 50k characters for NLP analysis");
+        textForNLP = textForNLP.substring(0, MAX_NLP_TEXT_LENGTH);
+      }
+      
+      showProgress(50, "Computing NLP metrics...");
+      
+      if (DEBUG) console.log("Sending to NLP, length:", textForNLP.length);
 
-      // Send to background for NLP computation
-      chrome.runtime.sendMessage(
-        { action: "computeNLP", text: response.text },
-        (nlp) => {
-          if (!nlp) {
-            wordCountEl.textContent = "-";
-            readingTimeEl.textContent = "-";
-            topKeywordsEl.textContent = "-";
-            sentimentScoreEl.textContent = "-";
-            subjectivityScoreEl.textContent = "-";
-            return;
-          }
-
-          wordCountEl.textContent = nlp.wordCount;
-          readingTimeEl.textContent = nlp.readingTime;
-          topKeywordsEl.textContent = nlp.topKeywords;
-          sentimentScoreEl.textContent = nlp.sentimentScore;
-          subjectivityScoreEl.textContent = nlp.subjectivityScore;
-
-          // Add context labels
-          const sentimentLabel = getSentimentLabel(nlp.sentimentScore);
-          sentimentLabelEl.textContent = sentimentLabel.text;
-          sentimentLabelEl.className = "context-label " + sentimentLabel.className;
-
-          const subjectivityLabel = getSubjectivityLabel(nlp.subjectivityScore);
-          subjectivityLabelEl.textContent = subjectivityLabel.text;
-          subjectivityLabelEl.className = "context-label " + subjectivityLabel.className;
-        }
+      // Longer timeout for NLP on large texts
+      const nlp = await sendMessageWithTimeout(
+        { action: "computeNLP", text: textForNLP },
+        NLP_TIMEOUT  // 30 seconds for NLP
       );
+      
+      hideProgress();
+      
+      if (DEBUG) console.log("NLP results:", nlp);
+      
+      if (!nlp || nlp.error) {
+        throw new Error(nlp?.error || "NLP computation failed");
+      }
+
+      wordCountEl.textContent = nlp.wordCount;
+      readingTimeEl.textContent = nlp.readingTime;
+      topKeywordsEl.textContent = nlp.topKeywords;
+      sentimentScoreEl.textContent = nlp.sentimentScore;
+      subjectivityScoreEl.textContent = nlp.subjectivityScore;
+
+      // Add context labels
+      const sentimentLabel = getSentimentLabel(nlp.sentimentScore);
+      sentimentLabelEl.textContent = sentimentLabel.text;
+      sentimentLabelEl.className = "context-label " + sentimentLabel.className;
+
+      const subjectivityLabel = getSubjectivityLabel(nlp.subjectivityScore);
+      subjectivityLabelEl.textContent = subjectivityLabel.text;
+      subjectivityLabelEl.className = "context-label " + subjectivityLabel.className;
+      
     } catch (err) {
-      console.error("Analyze error:", err);
+      if (DEBUG) console.error("Analyze error:", err);
+      hideProgress();
       wordCountEl.textContent = "Error";
       readingTimeEl.textContent = "-";
       topKeywordsEl.textContent = err.message;
@@ -171,43 +276,51 @@ document.addEventListener("DOMContentLoaded", async () => {
   // --------------------
   // SUMMARIZE Button
   // --------------------
+  
   generateBtn.addEventListener("click", async () => {
     try {
       generateBtn.disabled = true;
       generateBtn.textContent = "Summarizing...";
       summaryEl.textContent = "Processing...";
       
-      // Show initial progress
+      if (DEBUG) console.log("Starting summarization...");
+      
       showProgress(5, "Extracting article text...");
 
       // Extract text from current tab
       const response = await getTextFromActiveTab();
       
-      // Use filtered text (no references) for summarization
       const text = response.textForSummary;
+      
+      if (DEBUG) console.log("Sending to summarizer, length:", text.length);
 
       showProgress(8, "Initializing AI model...");
 
-      // Send to background for summarization
-      chrome.runtime.sendMessage(
-        { action: "generateSummary", text, model: MODEL },
-        (summaryResponse) => {
-          hideProgress();
-          
-          if (summaryResponse?.success) {
-            summaryEl.textContent = summaryResponse.summary;
-          } else {
-            summaryEl.textContent = "Error: " + (summaryResponse?.error || "Unknown error");
-          }
-        }
+      // Send to background for summarization (give it 3 minutes for large PDFs)
+      const summaryResponse = await sendMessageWithTimeout(
+        { action: "generateSummary", text: text, model: MODEL },
+        SUMMARIZATION_TIMEOUT  // 3 minutes
       );
-    } catch (err) {
-      console.error("Summarize error:", err);
+      
+      if (DEBUG) console.log("Summarization complete");
+      
       hideProgress();
-      summaryEl.textContent = "Error extracting text: " + err.message;
+      
+      if (summaryResponse?.success) {
+        summaryEl.textContent = summaryResponse.summary;
+      } else {
+        summaryEl.textContent = "Error: " + (summaryResponse?.error || "Unknown error");
+      }
+      
+    } catch (err) {
+      if (DEBUG) console.error("Summarize error:", err);
+      hideProgress();
+      summaryEl.textContent = "Error: " + err.message;
     } finally {
       generateBtn.disabled = false;
       generateBtn.textContent = "Summarize";
     }
   });
+  
+  if (DEBUG) console.log("Popup ready");
 });

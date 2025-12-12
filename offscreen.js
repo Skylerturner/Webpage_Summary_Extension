@@ -1,21 +1,31 @@
 // offscreen.js
-// Handles summarization using transformers.js as an ES6 module
+// Handles PDF extraction and summarization using transformers.js
 
-// Import transformers.js as a module
-import { pipeline, env } from './transformers.js';
+import { DEBUG } from './config.js';
 
-console.log("Offscreen.js loaded");
-console.log("✅ Transformers.js imported successfully");
+if (DEBUG) console.log("Offscreen.js starting to load...");
 
-// Configure environment for Chrome extension - USE LOCAL FILES
+// Import transformers.js from ROOT (not from transformers/ folder)
+if (DEBUG) console.log("Importing transformers.js from root...");
+const { pipeline, env } = await import('./transformers.js');
+
+if (DEBUG) console.log("Transformers.js imported successfully");
+
+// Configure environment - WASM files are in transformers/ folder
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
-env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('transformers/');  // Point to transformers subfolder
+env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('transformers/');
+if (DEBUG) console.log("Environment configured - WASM path:", chrome.runtime.getURL('transformers/'));
 
 // Pipeline cache
 const pipelineCache = {};
 
+// ========================================
+// Progress Updates
+// ========================================
+
 function sendProgress(progress, status) {
+  if (DEBUG) console.log(`Progress: ${progress}% - ${status}`);
   chrome.runtime.sendMessage({
     type: 'summarizationProgress',
     progress,
@@ -23,12 +33,75 @@ function sendProgress(progress, status) {
   }).catch(() => {});
 }
 
-// Estimate tokens for chunking
+// ========================================
+// PDF Text Extraction
+// ========================================
+
+async function extractPDFText(pdfUrl) {
+  try {
+    if (DEBUG) console.log("[PDF] Starting extraction for:", pdfUrl);
+    
+    // Import PDF.js
+    if (DEBUG) console.log("[PDF] Importing PDF.js...");
+    const pdfjsLib = await import('./pdf-lib/pdf.mjs');
+    if (DEBUG) console.log("[PDF] PDF.js imported");
+    
+    // Set worker path
+    const workerPath = chrome.runtime.getURL('pdf-lib/pdf.worker.mjs');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerPath;
+    if (DEBUG) console.log("[PDF] Worker configured");
+    
+    // Fetch PDF
+    if (DEBUG) console.log("[PDF] Fetching PDF...");
+    const response = await fetch(pdfUrl);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const arrayBuffer = await response.arrayBuffer();
+    const sizeMB = (arrayBuffer.byteLength / 1024 / 1024).toFixed(2);
+    if (DEBUG) console.log(`[PDF] Downloaded: ${sizeMB} MB`);
+    
+    // Load PDF
+    if (DEBUG) console.log("[PDF] Loading document...");
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    if (DEBUG) console.log(`[PDF] Loaded: ${pdf.numPages} pages`);
+    
+    // Extract text from all pages
+    let fullText = '';
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      
+      const pageText = textContent.items
+        .map(item => item.str)
+        .join(' ');
+      
+      fullText += pageText + '\n\n';
+      
+      if (pageNum % 10 === 0) {
+        if (DEBUG) console.log(`[PDF] Processed ${pageNum}/${pdf.numPages} pages`);
+      }
+    }
+    
+    if (DEBUG) console.log(`[PDF] COMPLETE: ${fullText.length} characters`);
+    return fullText.trim();
+    
+  } catch (error) {
+    if (DEBUG) console.error("[PDF] Failed:", error);
+    throw new Error(`PDF extraction failed: ${error.message}`);
+  }
+}
+
+// ========================================
+// Text Summarization
+// ========================================
+
 function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
 
-// Split text into chunks for long inputs
 function chunkText(text, maxTokensPerChunk = 400) {
   const maxChars = maxTokensPerChunk * 4;
   if (text.length <= maxChars) return [text];
@@ -61,19 +134,46 @@ function chunkText(text, maxTokensPerChunk = 400) {
   return chunks;
 }
 
-// Summarize a single chunk
-async function summarizeChunk(text, model) {
+/**
+ * Calculate appropriate summary length based on input length
+ * Uses hybrid approach: dynamic scaling with tiered bounds
+ */
+function calculateSummaryLength(inputTokens) {
+  // Base calculation: aim for 18% of input length
+  let targetLength = Math.floor(inputTokens * 0.18);
+  
+  // Apply tiered caps based on article length
+  if (inputTokens < 500) {
+    // Short articles (< 2000 chars): 40-120 tokens
+    targetLength = Math.max(40, Math.min(targetLength, 120));
+  } else if (inputTokens < 2000) {
+    // Medium articles (2000-8000 chars): 120-250 tokens
+    targetLength = Math.max(120, Math.min(targetLength, 250));
+  } else if (inputTokens < 5000) {
+    // Long articles (8000-20000 chars): 250-400 tokens
+    targetLength = Math.max(250, Math.min(targetLength, 400));
+  } else {
+    // Very long articles (>20000 chars): 400-600 tokens
+    targetLength = Math.max(400, Math.min(targetLength, 600));
+  }
+  
+  return {
+    max_length: targetLength,
+    min_length: Math.floor(targetLength * 0.4)
+  };
+}
+
+async function summarizeChunk(text, model, summaryLengths = null) {
   if (!pipelineCache[model]) {
     sendProgress(15, `Loading model ${model}...`);
     
-    // Try WebGPU first, fall back to WASM if unavailable
     try {
       pipelineCache[model] = await pipeline("summarization", model, { 
-        device: "webgpu"  // Use GPU acceleration
+        device: "webgpu"
       });
-      console.log("✅ Using WebGPU acceleration");
+      if (DEBUG) console.log("Using WebGPU acceleration");
     } catch (e) {
-      console.log("⚠️ WebGPU not available, falling back to WASM");
+      if (DEBUG) console.log("WebGPU unavailable, using WASM");
       pipelineCache[model] = await pipeline("summarization", model);
     }
     
@@ -83,59 +183,67 @@ async function summarizeChunk(text, model) {
   const summarizer = pipelineCache[model];
   let inputText = model.includes("t5") ? "summarize: " + text : text;
 
+  // Calculate summary length if not provided
+  if (!summaryLengths) {
+    const inputTokens = estimateTokens(text);
+    summaryLengths = calculateSummaryLength(inputTokens);
+  }
+
   sendProgress(60, "Generating summary...");
-  const result = await summarizer(inputText, { max_length: 150, min_length: 40, do_sample: false });
+  const result = await summarizer(inputText, { 
+    max_length: summaryLengths.max_length, 
+    min_length: summaryLengths.min_length, 
+    do_sample: false 
+  });
   return result[0].summary_text;
 }
 
-// Main summarization function with iterative reduction for long documents
 async function summarizeWithTransformersJS(text, model = "distilbart-cnn-12-6") {
   const tokens = estimateTokens(text);
   
-  // Warn for very large articles
   if (tokens > 5000) {
-    sendProgress(5, `Large article (${tokens} tokens) - this may take several minutes...`);
+    sendProgress(5, `Large article (${tokens} tokens)...`);
   }
   
-  // Use smaller context for better memory management
   const maxTokens = model.includes("bart") ? 512 : 400;
 
-  // If text fits in one chunk, summarize directly
+  // For short articles, use dynamic length calculation
   if (tokens < maxTokens * 0.8) {
-    return await summarizeChunk(text, model);
+    const summaryLengths = calculateSummaryLength(tokens);
+    if (DEBUG) console.log(`Short article: ${tokens} tokens -> summary ${summaryLengths.min_length}-${summaryLengths.max_length} tokens`);
+    return await summarizeChunk(text, model, summaryLengths);
   }
 
-  // Split into chunks
+  // For long articles, summarize in chunks
   const chunks = chunkText(text, Math.floor(maxTokens * 0.8));
   sendProgress(10, `Processing ${chunks.length} chunks...`);
 
-  // Summarize each chunk
   const summaries = [];
   for (let i = 0; i < chunks.length; i++) {
-    sendProgress(10 + ((i / chunks.length) * 50), `Summarizing chunk ${i + 1}/${chunks.length}...`);
-    const summary = await summarizeChunk(chunks[i], model);
+    sendProgress(10 + ((i / chunks.length) * 50), `Chunk ${i + 1}/${chunks.length}...`);
+    // Use moderate summary length for individual chunks
+    const chunkSummaryLength = { max_length: 150, min_length: 60 };
+    const summary = await summarizeChunk(chunks[i], model, chunkSummaryLength);
     summaries.push(summary);
   }
 
-  // Iteratively reduce summaries until we have a manageable size
   let currentSummaries = summaries;
   let iteration = 1;
   
   while (currentSummaries.length > 1) {
     sendProgress(60 + (iteration * 10), `Combining summaries (round ${iteration})...`);
     
-    // Combine summaries and estimate tokens
     const combined = currentSummaries.join(" ");
     const combinedTokens = estimateTokens(combined);
     
-    // If combined summaries fit in one chunk, do final summarization
     if (combinedTokens < maxTokens * 0.8) {
       sendProgress(85, "Creating final summary...");
-      return await summarizeChunk(combined, model);
+      // Use dynamic length for final summary based on ORIGINAL article length
+      const finalSummaryLengths = calculateSummaryLength(tokens);
+      if (DEBUG) console.log(`Final summary: ${tokens} original tokens -> ${finalSummaryLengths.min_length}-${finalSummaryLengths.max_length} tokens`);
+      return await summarizeChunk(combined, model, finalSummaryLengths);
     }
     
-    // Otherwise, split into groups and summarize each group
-    // Reduce by 1/5 each iteration (5 summaries -> 1 summary)
     const groupSize = 5;
     const nextRoundSummaries = [];
     
@@ -143,12 +251,12 @@ async function summarizeWithTransformersJS(text, model = "distilbart-cnn-12-6") 
       const group = currentSummaries.slice(i, i + groupSize);
       const groupText = group.join(" ");
       
-      // Only summarize if group is too large
       if (estimateTokens(groupText) > maxTokens * 0.8) {
-        const groupSummary = await summarizeChunk(groupText, model);
+        // Use moderate length for intermediate summaries
+        const intermediateSummaryLength = { max_length: 180, min_length: 70 };
+        const groupSummary = await summarizeChunk(groupText, model, intermediateSummaryLength);
         nextRoundSummaries.push(groupSummary);
       } else {
-        // If group is small enough, keep as is
         nextRoundSummaries.push(groupText);
       }
     }
@@ -156,26 +264,66 @@ async function summarizeWithTransformersJS(text, model = "distilbart-cnn-12-6") 
     currentSummaries = nextRoundSummaries;
     iteration++;
     
-    // Safety check: prevent infinite loops
     if (iteration > 5) {
-      console.warn("Max iterations reached, returning multi-part summary");
+      if (DEBUG) console.warn("Max iterations reached");
       return "SUMMARY (Multi-part):\n\n" + currentSummaries.map((s, i) => `Part ${i + 1}: ${s}`).join("\n\n");
     }
   }
 
-  // If we end up with exactly one summary, return it
   return currentSummaries[0];
 }
 
-// Listen for summarization requests
+// ========================================
+// Message Listener
+// ========================================
+
+if (DEBUG) console.log("Setting up message listener...");
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (DEBUG) console.log("Received:", message.action);
+  
+  // Ping handler - responds when offscreen is ready
+  if (message.action === "ping") {
+    if (DEBUG) console.log("Ping received, responding ready");
+    sendResponse({ ready: true });
+    return true;
+  }
+  
+  if (message.action === "extractPDF") {
+    if (DEBUG) console.log("Starting PDF extraction...");
+    
+    (async () => {
+      try {
+        const text = await extractPDFText(message.pdfUrl);
+        if (DEBUG) console.log(`Sending ${text.length} characters back`);
+        sendResponse({ success: true, text });
+      } catch (error) {
+        if (DEBUG) console.error("Error:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    
+    return true;
+  }
+  
   if (message.action === "summarizeWithTransformers") {
-    summarizeWithTransformersJS(message.text, message.model)
-      .then(summary => {
+    if (DEBUG) console.log("Starting summarization...");
+    
+    (async () => {
+      try {
+        const summary = await summarizeWithTransformersJS(message.text, message.model);
         sendProgress(100, "Complete!");
         sendResponse({ success: true, summary });
-      })
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true; // Keep message channel open
+      } catch (error) {
+        if (DEBUG) console.error("Error:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    
+    return true;
   }
+  
+  return false;
 });
+
+if (DEBUG) console.log("Offscreen document ready");

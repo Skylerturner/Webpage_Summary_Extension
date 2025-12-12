@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "description": "Intelligently extracts and summarizes web articles using local AI - completely private, no API keys required",
   "author": "Skyler Turner",
-  
   "permissions": [
     "storage",
     "tabs",
@@ -12,48 +11,50 @@
     "scripting",
     "offscreen"
   ],
-
   "host_permissions": [
     "https://huggingface.co/*"
   ],
-
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
-
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "popup_files/popup.html",
     "default_title": "Summarize Article",
     "default_icon": {
-      "16": "icon16.png",
-      "48": "icon48.png",
-      "128": "icon128.png"
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
     }
   },
-
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
-
   "web_accessible_resources": [
     {
-      "resources": ["pdf-lib/*.mjs"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "pdf-lib/*.mjs",
+        "Afinn.csv"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
-
   "icons": {
-    "16": "icon16.png",
-    "48": "icon48.png",
-    "128": "icon128.png"
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }

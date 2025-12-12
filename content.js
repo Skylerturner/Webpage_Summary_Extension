@@ -1,11 +1,19 @@
 // content.js
 // Extracts article content from web pages and PDFs
 
+// Configuration constants (inline for content script)
+const DEBUG = true;
+const MIN_ARTICLE_LENGTH = 500;
+const MIN_PARAGRAPH_LENGTH = 50;
+const SHORT_CONTENT_THRESHOLD = 200;
+
+
 // ========================================
 // Text Cleaning Utilities
 // ========================================
 
 /**
+
  * Normalize whitespace and line breaks in extracted text
  */
 function cleanText(text) {
@@ -16,7 +24,69 @@ function cleanText(text) {
 }
 
 // ========================================
-// Extraction Methods
+// PDF Detection and URL Extraction
+// ========================================
+
+/**
+ * Detect if current page is a PDF and extract the URL
+ * Handles multiple PDF viewer formats
+ */
+function detectAndExtractPDF() {
+  if (DEBUG) console.log("Checking if page is a PDF...");
+  
+  // Method 1: Check for Chrome's PDF viewer embed (most common)
+  const pdfEmbed = document.querySelector('embed[type="application/x-google-chrome-pdf"]');
+  if (pdfEmbed) {
+    const pdfUrl = pdfEmbed.getAttribute('original-url');
+    if (pdfUrl) {
+      if (DEBUG) console.log("PDF detected (embed method):", pdfUrl);
+      return pdfUrl;
+    }
+  }
+  
+  // Method 2: Check for older Chrome PDF viewer
+  const oldPdfEmbed = document.querySelector('embed#plugin[type="application/x-google-chrome-pdf"]');
+  if (oldPdfEmbed) {
+    const pdfUrl = oldPdfEmbed.getAttribute('original-url');
+    if (pdfUrl) {
+      if (DEBUG) console.log("PDF detected (old embed method):", pdfUrl);
+      return pdfUrl;
+    }
+  }
+  
+  // Method 3: Check if URL ends with .pdf (direct PDF URL)
+  const currentUrl = window.location.href;
+  if (currentUrl.toLowerCase().endsWith('.pdf')) {
+    if (DEBUG) console.log("PDF detected (URL method):", currentUrl);
+    return currentUrl;
+  }
+  
+  // Method 4: Check for pdf-viewer web component (new Chrome viewer)
+  const pdfViewer = document.querySelector('pdf-viewer');
+  if (pdfViewer) {
+    // The embed is usually a sibling or child
+    const embed = document.querySelector('embed[type="application/x-google-chrome-pdf"]');
+    if (embed) {
+      const pdfUrl = embed.getAttribute('original-url');
+      if (pdfUrl) {
+        if (DEBUG) console.log("PDF detected (web component method):", pdfUrl);
+        return pdfUrl;
+      }
+    }
+  }
+  
+  // Method 5: Check document title or meta tags for PDF indicators
+  if (document.contentType === 'application/pdf') {
+    if (DEBUG) console.log("PDF detected (content-type method):", window.location.href);
+    return window.location.href;
+  }
+  
+  if (DEBUG) console.log("Not a PDF page");
+  return null;
+}
+
+// ========================================
+// Extraction Methods for Regular Web Pages
 // ========================================
 
 /**
@@ -90,7 +160,7 @@ function extractFromOpenGraph() {
   }
 
   // Only return if it's more than a brief description
-  return bestContent.length > 200 ? cleanText(bestContent) : "";
+  return bestContent.length > SHORT_CONTENT_THRESHOLD ? cleanText(bestContent) : "";
 }
 
 /**
@@ -108,7 +178,7 @@ function extractFromDOM(filterReferences = false) {
     }
     
     const text = p.innerText?.trim();
-    if (!text || text.length < 50) continue;  // Only substantial paragraphs
+    if (!text || text.length < MIN_PARAGRAPH_LENGTH) continue;  // Only substantial paragraphs
     
     // Filter out common UI/junk patterns
     const junkPatterns = [
@@ -125,7 +195,7 @@ function extractFromDOM(filterReferences = false) {
       const referencePatterns = [
         /^(doi|pmid|issn):/i,
         /springer nature|copyright.*\d{4}|all rights reserved/i,
-        /^\d{1,3},\s*\d+–\d+\s*\(\d{4}\)/,  // Citation format: "123, 456-789 (2020)"
+        /^\d{1,3},\s*\d+Ã¢â‚¬"\d+\s*\(\d{4}\)/,  // Citation format: "123, 456-789 (2020)"
         /^[A-Z][a-z]+,\s+[A-Z]\.\s+[A-Z]\./,  // Author format: "Smith, J. A."
         /shareable link|peer review|received.*accepted.*published/i,
         /geophys\.|sci\.|lett\.|res\./i  // Journal abbreviations
@@ -166,38 +236,51 @@ function extractFromDOM(filterReferences = false) {
  * @returns {Object} Extraction result with text and source method
  */
 function extractArticle(filterReferences = false) {
-  // Check if this is a PDF - return URL for background script to process
-  const pdfEmbed = document.querySelector('embed#plugin[type="application/x-google-chrome-pdf"]');
-  if (pdfEmbed) {
-    const pdfUrl = pdfEmbed.getAttribute('original-url');
-    if (pdfUrl) {
-      console.log("PDF detected:", pdfUrl);
-      return { text: "", pdfUrl: pdfUrl, source: "PDF" };
-    }
+  // FIRST: Check if this is a PDF
+  const pdfUrl = detectAndExtractPDF();
+  if (pdfUrl) {
+    if (DEBUG) console.log("PDF detected, returning URL for background processing");
+    return { 
+      text: "", 
+      pdfUrl: pdfUrl, 
+      source: "PDF" 
+    };
   }
+  
+  if (DEBUG) console.log("Regular web page, extracting content...");
   
   // Strategy 1: Try JSON-LD structured data (best for news sites)
   const jsonLD = extractFromJSONLD();
   if (jsonLD && jsonLD.length > 1000) {
+    if (DEBUG) console.log("Extracted via JSON-LD:", jsonLD.length, "characters");
     return { text: jsonLD, source: "JSON-LD" };
   }
 
   // Strategy 2: DOM scraping (most reliable for full articles)
   const dom = extractFromDOM(filterReferences);
   if (dom && dom.length > 500) {
+    if (DEBUG) console.log("Extracted via DOM:", dom.length, "characters");
     return { text: dom, source: "DOM" };
   }
 
   // Strategy 3: Open Graph / meta tags (fallback)
   const og = extractFromOpenGraph();
   if (og) {
+    if (DEBUG) console.log("Extracted via Open Graph:", og.length, "characters");
     return { text: og, source: "OpenGraph" };
   }
   
   // Last resort: return whatever we got, even if short
-  if (jsonLD) return { text: jsonLD, source: "JSON-LD (short)" };
-  if (dom) return { text: dom, source: "DOM (short)" };
+  if (jsonLD) {
+    if (DEBUG) console.log("Short content from JSON-LD:", jsonLD.length, "characters");
+    return { text: jsonLD, source: "JSON-LD (short)" };
+  }
+  if (dom) {
+    if (DEBUG) console.log("Short content from DOM:", dom.length, "characters");
+    return { text: dom, source: "DOM (short)" };
+  }
   
+  if (DEBUG) console.log("No content extracted");
   return { text: "", source: "None" };
 }
 
@@ -207,25 +290,35 @@ function extractArticle(filterReferences = false) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === "extractText") {
-    // Extract full text (no filtering - for NLP analysis)
-    const fullExtraction = extractArticle(false);
+    if (DEBUG) console.log("Received extractText request");
+    
+    // Extract once (no filtering)
+    const extraction = extractArticle(false);
     
     // If it's a PDF, return the URL for background script to process
-    if (fullExtraction.pdfUrl) {
+    if (extraction.pdfUrl) {
+      if (DEBUG) console.log("Sending PDF URL to popup:", extraction.pdfUrl);
       sendResponse({
-        pdfUrl: fullExtraction.pdfUrl,
+        pdfUrl: extraction.pdfUrl,
         source: "PDF"
       });
       return;
     }
     
-    // Extract filtered text (remove references - for summarization)
-    const filteredExtraction = extractArticle(true);
+    // For regular pages: full text for NLP, filtered for summary
+    // Apply filtering to the extracted text rather than re-extracting
+    const textForSummary = extraction.source === "DOM" 
+      ? extractFromDOM(true)  // DOM extraction supports filtering
+      : extraction.text;      // Other methods don't need filtering
 
+    if (DEBUG) console.log("Sending extracted text to popup");
     sendResponse({ 
-      text: fullExtraction.text,              // Full text for NLP analysis
-      textForSummary: filteredExtraction.text, // Filtered text for summarization
-      source: fullExtraction.source
+      text: extraction.text,              // Full text for NLP analysis
+      textForSummary: textForSummary,     // Filtered text for summarization
+      source: extraction.source
     });
   }
 });
+
+
+if (DEBUG) console.log("Content script loaded and ready");
