@@ -2,7 +2,7 @@
 // Extracts article content from web pages and PDFs
 
 // Configuration constants (inline for content script)
-const DEBUG = true;
+const DEBUG = false;
 const MIN_ARTICLE_LENGTH = 500;
 const MIN_PARAGRAPH_LENGTH = 50;
 const SHORT_CONTENT_THRESHOLD = 200;
@@ -12,10 +12,7 @@ const SHORT_CONTENT_THRESHOLD = 200;
 // Text Cleaning Utilities
 // ========================================
 
-/**
-
- * Normalize whitespace and line breaks in extracted text
- */
+// Normalize whitespace and line breaks in extracted text
 function cleanText(text) {
   return text
     .replace(/\s+/g, " ")           // Collapse multiple spaces
@@ -27,10 +24,8 @@ function cleanText(text) {
 // PDF Detection and URL Extraction
 // ========================================
 
-/**
- * Detect if current page is a PDF and extract the URL
- * Handles multiple PDF viewer formats
- */
+// Detect if current page is a PDF and extract the URL
+// Handles multiple PDF viewer formats
 function detectAndExtractPDF() {
   if (DEBUG) console.log("Checking if page is a PDF...");
   
@@ -89,10 +84,8 @@ function detectAndExtractPDF() {
 // Extraction Methods for Regular Web Pages
 // ========================================
 
-/**
- * Extract article content from JSON-LD structured data
- * Looks for Article, NewsArticle, or BlogPosting schema types
- */
+// Extract article content from JSON-LD structured data
+// Looks for Article, NewsArticle, or BlogPosting schema types
 function extractFromJSONLD() {
   const scripts = document.querySelectorAll('script[type="application/ld+json"]');
   let bestContent = "";
@@ -135,10 +128,8 @@ function extractFromJSONLD() {
   return bestContent.length > 500 ? cleanText(bestContent) : "";
 }
 
-/**
- * Extract article content from Open Graph and meta tags
- * Used as fallback when JSON-LD is not available
- */
+// Extract article content from Open Graph and meta tags
+// Used as fallback when JSON-LD is not available
 function extractFromOpenGraph() {
   const metaSelectors = [
     'meta[property="og:article:content"]',
@@ -163,10 +154,8 @@ function extractFromOpenGraph() {
   return bestContent.length > SHORT_CONTENT_THRESHOLD ? cleanText(bestContent) : "";
 }
 
-/**
- * Extract article content by scraping DOM paragraphs
- * Most reliable method for full articles, with aggressive filtering
- */
+// Extract article content by scraping DOM paragraphs
+// Most reliable method for full articles, with aggressive filtering
 function extractFromDOM(filterReferences = false) {
   const allParagraphs = [...document.querySelectorAll('p')];
   const validParagraphs = [];

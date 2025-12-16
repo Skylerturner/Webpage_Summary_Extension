@@ -322,19 +322,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (action === "generateSummary") {
-    if (DEBUG) console.log("Received generateSummary request");
-    summarizeWithTransformers(message.text, message.model)
+    const text = message.text?.trim() || "";
+
+    if (text.length < MIN_ARTICLE_LENGTH) {
+      sendResponse({
+        success: false,
+        error: `Article is too short to summarize (minimum ${MIN_ARTICLE_LENGTH} characters).`
+      });
+      return true;
+    }
+
+    summarizeWithTransformers(text, message.model)
       .then(summary => {
-        if (DEBUG) console.log("Sending summary back to popup");
         sendResponse({ success: true, summary });
       })
       .catch(err => {
-        if (DEBUG) console.error("Sending error back to popup:", err.message);
-        sendResponse({ success: false, error: err.message || String(err) });
+        sendResponse({ success: false, error: err.message });
       });
 
     return true;
   }
+
 
   if (action === "computeNLP") {
     if (DEBUG) console.log("Received computeNLP request");
