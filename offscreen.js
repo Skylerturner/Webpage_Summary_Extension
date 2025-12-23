@@ -5,9 +5,9 @@ import { DEBUG } from './config.js';
 
 if (DEBUG) console.log("Offscreen.js starting to load...");
 
-// Import transformers.js from ROOT (not from transformers/ folder)
+// Import transformers.js from ROOT
 if (DEBUG) console.log("Importing transformers.js from root...");
-const { pipeline, env } = await import('.transformers/transformers.js');
+const { pipeline, env } = await import('./transformers.js');
 
 if (DEBUG) console.log("Transformers.js imported successfully");
 
