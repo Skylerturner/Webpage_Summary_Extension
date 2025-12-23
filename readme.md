@@ -113,8 +113,8 @@ smart-article-summarizer/
 │   ├── icon16.png
 │   ├── icon48.png
 │   └── icon128.png
+├── transformers.js
 └── transformers/
-    ├── transformers.js
     ├── ort-wasm-simd-threaded.jsep
     └── ort-wasm-simd-threaded.jsep.wasm
 ```
